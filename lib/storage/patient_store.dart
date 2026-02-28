@@ -1,24 +1,37 @@
-import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:isar/isar.dart';
+
 import '../models/patient.dart';
+import 'isar_db.dart';
 
 class PatientStore {
-  static const _key = 'patient_profile_v1';
-
   static Future<void> save(Patient patient) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, jsonEncode(patient.toJson()));
+    final isar = IsarDB.instance;
+    await isar.writeTxn(() async {
+      await isar.patients.put(patient);
+    });
   }
-
+  static Future<int> saveAndReturnId(Patient patient) async {
+    final isar = IsarDB.instance;
+    late int id;
+    await isar.writeTxn(() async {
+      id = await isar.patients.put(patient);
+    });
+    return id;
+  }
   static Future<Patient?> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
-    if (raw == null || raw.isEmpty) return null;
-    return Patient.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    final isar = IsarDB.instance;
+
+    // 최근 저장된 환자 1명: id 최대값을 찾아서 가져오기
+    final lastId = await isar.patients.where().anyId().idProperty().max();
+    if (lastId == null) return null;
+
+    return await isar.patients.get(lastId);
   }
 
   static Future<void> clear() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_key);
+    final isar = IsarDB.instance;
+    await isar.writeTxn(() async {
+      await isar.patients.clear();
+    });
   }
 }

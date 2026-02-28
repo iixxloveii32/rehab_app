@@ -32,33 +32,38 @@ const EvaluationSchema = CollectionSchema(
       name: r'gait',
       type: IsarType.long,
     ),
-    r'patientName': PropertySchema(
+    r'patientId': PropertySchema(
       id: 3,
+      name: r'patientId',
+      type: IsarType.long,
+    ),
+    r'patientName': PropertySchema(
+      id: 4,
       name: r'patientName',
       type: IsarType.string,
     ),
     r'rolling': PropertySchema(
-      id: 4,
+      id: 5,
       name: r'rolling',
       type: IsarType.long,
     ),
     r'sitToStand': PropertySchema(
-      id: 5,
+      id: 6,
       name: r'sitToStand',
       type: IsarType.long,
     ),
     r'stair': PropertySchema(
-      id: 6,
+      id: 7,
       name: r'stair',
       type: IsarType.long,
     ),
     r'totalScore': PropertySchema(
-      id: 7,
+      id: 8,
       name: r'totalScore',
       type: IsarType.long,
     ),
     r'transfer': PropertySchema(
-      id: 8,
+      id: 9,
       name: r'transfer',
       type: IsarType.long,
     )
@@ -96,12 +101,13 @@ void _evaluationSerialize(
   writer.writeLong(offsets[0], object.comeToSit);
   writer.writeDateTime(offsets[1], object.date);
   writer.writeLong(offsets[2], object.gait);
-  writer.writeString(offsets[3], object.patientName);
-  writer.writeLong(offsets[4], object.rolling);
-  writer.writeLong(offsets[5], object.sitToStand);
-  writer.writeLong(offsets[6], object.stair);
-  writer.writeLong(offsets[7], object.totalScore);
-  writer.writeLong(offsets[8], object.transfer);
+  writer.writeLong(offsets[3], object.patientId);
+  writer.writeString(offsets[4], object.patientName);
+  writer.writeLong(offsets[5], object.rolling);
+  writer.writeLong(offsets[6], object.sitToStand);
+  writer.writeLong(offsets[7], object.stair);
+  writer.writeLong(offsets[8], object.totalScore);
+  writer.writeLong(offsets[9], object.transfer);
 }
 
 Evaluation _evaluationDeserialize(
@@ -115,11 +121,12 @@ Evaluation _evaluationDeserialize(
   object.date = reader.readDateTime(offsets[1]);
   object.gait = reader.readLong(offsets[2]);
   object.id = id;
-  object.patientName = reader.readString(offsets[3]);
-  object.rolling = reader.readLong(offsets[4]);
-  object.sitToStand = reader.readLong(offsets[5]);
-  object.stair = reader.readLong(offsets[6]);
-  object.transfer = reader.readLong(offsets[8]);
+  object.patientId = reader.readLong(offsets[3]);
+  object.patientName = reader.readString(offsets[4]);
+  object.rolling = reader.readLong(offsets[5]);
+  object.sitToStand = reader.readLong(offsets[6]);
+  object.stair = reader.readLong(offsets[7]);
+  object.transfer = reader.readLong(offsets[9]);
   return object;
 }
 
@@ -137,9 +144,9 @@ P _evaluationDeserializeProp<P>(
     case 2:
       return (reader.readLong(offset)) as P;
     case 3:
-      return (reader.readString(offset)) as P;
-    case 4:
       return (reader.readLong(offset)) as P;
+    case 4:
+      return (reader.readString(offset)) as P;
     case 5:
       return (reader.readLong(offset)) as P;
     case 6:
@@ -147,6 +154,8 @@ P _evaluationDeserializeProp<P>(
     case 7:
       return (reader.readLong(offset)) as P;
     case 8:
+      return (reader.readLong(offset)) as P;
+    case 9:
       return (reader.readLong(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -449,6 +458,60 @@ extension EvaluationQueryFilter
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(FilterCondition.between(
         property: r'id',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+      ));
+    });
+  }
+
+  QueryBuilder<Evaluation, Evaluation, QAfterFilterCondition> patientIdEqualTo(
+      int value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'patientId',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<Evaluation, Evaluation, QAfterFilterCondition>
+      patientIdGreaterThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'patientId',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<Evaluation, Evaluation, QAfterFilterCondition> patientIdLessThan(
+    int value, {
+    bool include = false,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'patientId',
+        value: value,
+      ));
+    });
+  }
+
+  QueryBuilder<Evaluation, Evaluation, QAfterFilterCondition> patientIdBetween(
+    int lower,
+    int upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'patientId',
         lower: lower,
         includeLower: includeLower,
         upper: upper,
@@ -909,6 +972,18 @@ extension EvaluationQuerySortBy
     });
   }
 
+  QueryBuilder<Evaluation, Evaluation, QAfterSortBy> sortByPatientId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'patientId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<Evaluation, Evaluation, QAfterSortBy> sortByPatientIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'patientId', Sort.desc);
+    });
+  }
+
   QueryBuilder<Evaluation, Evaluation, QAfterSortBy> sortByPatientName() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'patientName', Sort.asc);
@@ -1032,6 +1107,18 @@ extension EvaluationQuerySortThenBy
     });
   }
 
+  QueryBuilder<Evaluation, Evaluation, QAfterSortBy> thenByPatientId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'patientId', Sort.asc);
+    });
+  }
+
+  QueryBuilder<Evaluation, Evaluation, QAfterSortBy> thenByPatientIdDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'patientId', Sort.desc);
+    });
+  }
+
   QueryBuilder<Evaluation, Evaluation, QAfterSortBy> thenByPatientName() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'patientName', Sort.asc);
@@ -1125,6 +1212,12 @@ extension EvaluationQueryWhereDistinct
     });
   }
 
+  QueryBuilder<Evaluation, Evaluation, QDistinct> distinctByPatientId() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'patientId');
+    });
+  }
+
   QueryBuilder<Evaluation, Evaluation, QDistinct> distinctByPatientName(
       {bool caseSensitive = true}) {
     return QueryBuilder.apply(this, (query) {
@@ -1186,6 +1279,12 @@ extension EvaluationQueryProperty
   QueryBuilder<Evaluation, int, QQueryOperations> gaitProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'gait');
+    });
+  }
+
+  QueryBuilder<Evaluation, int, QQueryOperations> patientIdProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'patientId');
     });
   }
 

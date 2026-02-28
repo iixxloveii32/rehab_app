@@ -4,10 +4,10 @@ import 'models/patient.dart';
 import 'storage/patient_store.dart';
 import 'dart:io';
 import 'package:camera/camera.dart';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:video_player/video_player.dart';
 import 'screens/eval_test_page.dart';
+import 'package:flutter/foundation.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
@@ -111,10 +111,10 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
         sex: _sex,
         birthDate: _birthDate!,
       );
-      await PatientStore.save(patient);
+      final patientId = await PatientStore.saveAndReturnId(patient);
 
       if (!mounted) return;
-      context.go('/record');
+      context.go('/record', extra: patientId);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -309,7 +309,13 @@ class _RecordingScreenState extends State<RecordingScreen> {
       );
       return;
     }
-    context.go('/review', extra: path);
+
+    final patientId = GoRouterState.of(context).extra as int?;
+
+    context.go('/review', extra: {
+      'videoPath': path,
+      'patientId': patientId,
+    });
   }
 
   @override
@@ -372,27 +378,44 @@ class _ReviewScreenState extends State<ReviewScreen> {
   }
 
   Future<void> _init() async {
-    final path = GoRouterState
-        .of(context)
-        .extra as String?;
-    if (path == null || path.isEmpty || !File(path).existsSync()) {
+    try {
+      final extra = GoRouterState.of(context).extra;
+      final data = (extra is Map) ? extra : null;
+
+      final path = data?['videoPath'] as String?;
+      if (path == null || path.isEmpty) {
+        throw Exception('videoPath가 전달되지 않았습니다.');
+      }
+      final f = File(path);
+      if (!f.existsSync()) {
+        throw Exception('영상 파일이 존재하지 않습니다: $path');
+      }
+
+      final controller = VideoPlayerController.file(f);
+
+      // ✅ 무한 로딩 방지: 10초 타임아웃
+      await controller.initialize().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw Exception('영상 초기화 시간이 초과되었습니다(10초).'),
+      );
+
+      await controller.setLooping(true);
+      await controller.play();
+
+      if (!mounted) return;
+      setState(() {
+        _vc = controller;
+        _loading = false;
+      });
+    } catch (e) {
+      // ✅ 어떤 경우든 로딩 종료 + 원인 표시
+      debugPrint('ReviewScreen init error: $e');
+      if (!mounted) return;
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('재생할 영상이 없습니다.')),
+        SnackBar(content: Text('관찰 영상 로드 실패: $e')),
       );
-      return;
     }
-
-    final controller = VideoPlayerController.file(File(path));
-    await controller.initialize();
-    await controller.setLooping(true);
-    await controller.play();
-
-    if (!mounted) return;
-    setState(() {
-      _vc = controller;
-      _loading = false;
-    });
   }
 
   @override
@@ -458,11 +481,18 @@ class _ReviewScreenState extends State<ReviewScreen> {
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () {
-                final path = GoRouterState
-                    .of(context)
-                    .extra as String?;
+                final extra = GoRouterState.of(context).extra;
+                final data = (extra is Map) ? extra : null;
+
+                final path = data?['videoPath'] as String?;
+                final patientId = data?['patientId'] as int?;
+
                 if (path == null) return;
-                context.go('/imitate', extra: path);
+
+                context.go('/imitate', extra: {
+                  'videoPath': path,
+                  'patientId': patientId,
+                });
               },
               child: const Text('따라하기(2분할)로'),
             ),
@@ -496,7 +526,11 @@ class _ImitationScreenState extends State<ImitationScreen> {
   }
 
   Future<void> _init() async {
-    final path = GoRouterState.of(context).extra as String?;
+    final extra = GoRouterState.of(context).extra;
+    final data = (extra is Map) ? extra : null;
+
+    final path = data?['videoPath'] as String?;
+    final patientId = data?['patientId'] as int?;
     if (path == null || path.isEmpty || !File(path).existsSync()) {
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -567,7 +601,12 @@ class _ImitationScreenState extends State<ImitationScreen> {
   }
 
   void _goFeedback() {
-    final modelPath = GoRouterState.of(context).extra as String?;
+    final extra = GoRouterState.of(context).extra;
+    final data = (extra is Map) ? extra : null;
+
+    final modelPath = data?['videoPath'] as String?;
+    final patientId = data?['patientId'] as int?;
+
     final patientPath = _patientVideo?.path;
 
     if (modelPath == null) {
@@ -586,6 +625,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
     context.go('/feedback', extra: {
       'modelPath': modelPath,
       'patientPath': patientPath,
+      'patientId': patientId,
     });
   }
 

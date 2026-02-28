@@ -1,23 +1,19 @@
-class Patient {
-  final String name;
-  final String sex; // 'M' or 'F'
-  final DateTime birthDate;
+import 'package:isar/isar.dart';
 
-  const Patient({
+part 'patient.g.dart';
+
+@collection
+class Patient {
+  Id id = Isar.autoIncrement;
+
+  late String name; // 환자명
+  late String sex; // 'M' or 'F'
+  late DateTime birthDate;
+
+  // ✅ 기존 코드 호환용 named constructor
+  Patient({
     required this.name,
     required this.sex,
     required this.birthDate,
   });
-
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'sex': sex,
-    'birthDate': birthDate.toIso8601String(),
-  };
-
-  static Patient fromJson(Map<String, dynamic> json) => Patient(
-    name: (json['name'] ?? '') as String,
-    sex: (json['sex'] ?? 'M') as String,
-    birthDate: DateTime.parse(json['birthDate'] as String),
-  );
 }

@@ -8,6 +8,7 @@ class Evaluation {
 
   late String patientName;
   late DateTime date;
+  late int patientId;
 
   // 6개 항목(1~7점)
   int rolling = 1;
