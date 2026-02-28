@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
-import 'app_router.dart';
+import 'storage/isar_db.dart';
+import 'screens/eval_test_page.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await IsarDB.init();
   runApp(const RehabApp());
 }
 
@@ -10,9 +13,9 @@ class RehabApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp.router(
+    return MaterialApp(
       title: 'Rehab App',
-      routerConfig: appRouter,
+      home: const EvalTestPage(),
     );
   }
 }
