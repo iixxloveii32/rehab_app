@@ -7,6 +7,7 @@ import 'package:camera/camera.dart';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:video_player/video_player.dart';
+import 'screens/eval_test_page.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
@@ -26,6 +27,10 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/imitate',
       builder: (context, state) => const ImitationScreen(),
+    ),
+    GoRoute(
+      path: '/eval-test',
+      builder: (context, state) => const EvalTestPage(),
     ),
     GoRoute(
       path: '/feedback',
