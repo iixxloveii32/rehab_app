@@ -17,18 +17,23 @@ const PatientSchema = CollectionSchema(
   name: r'Patient',
   id: -3057427754190339924,
   properties: {
-    r'birthDate': PropertySchema(
+    r'affectedSide': PropertySchema(
       id: 0,
+      name: r'affectedSide',
+      type: IsarType.string,
+    ),
+    r'birthDate': PropertySchema(
+      id: 1,
       name: r'birthDate',
       type: IsarType.dateTime,
     ),
     r'name': PropertySchema(
-      id: 1,
+      id: 2,
       name: r'name',
       type: IsarType.string,
     ),
     r'sex': PropertySchema(
-      id: 2,
+      id: 3,
       name: r'sex',
       type: IsarType.string,
     )
@@ -53,6 +58,7 @@ int _patientEstimateSize(
   Map<Type, List<int>> allOffsets,
 ) {
   var bytesCount = offsets.last;
+  bytesCount += 3 + object.affectedSide.length * 3;
   bytesCount += 3 + object.name.length * 3;
   bytesCount += 3 + object.sex.length * 3;
   return bytesCount;
@@ -64,9 +70,10 @@ void _patientSerialize(
   List<int> offsets,
   Map<Type, List<int>> allOffsets,
 ) {
-  writer.writeDateTime(offsets[0], object.birthDate);
-  writer.writeString(offsets[1], object.name);
-  writer.writeString(offsets[2], object.sex);
+  writer.writeString(offsets[0], object.affectedSide);
+  writer.writeDateTime(offsets[1], object.birthDate);
+  writer.writeString(offsets[2], object.name);
+  writer.writeString(offsets[3], object.sex);
 }
 
 Patient _patientDeserialize(
@@ -76,9 +83,10 @@ Patient _patientDeserialize(
   Map<Type, List<int>> allOffsets,
 ) {
   final object = Patient(
-    birthDate: reader.readDateTime(offsets[0]),
-    name: reader.readString(offsets[1]),
-    sex: reader.readString(offsets[2]),
+    affectedSide: reader.readStringOrNull(offsets[0]) ?? 'L',
+    birthDate: reader.readDateTime(offsets[1]),
+    name: reader.readString(offsets[2]),
+    sex: reader.readString(offsets[3]),
   );
   object.id = id;
   return object;
@@ -92,10 +100,12 @@ P _patientDeserializeProp<P>(
 ) {
   switch (propertyId) {
     case 0:
-      return (reader.readDateTime(offset)) as P;
+      return (reader.readStringOrNull(offset) ?? 'L') as P;
     case 1:
-      return (reader.readString(offset)) as P;
+      return (reader.readDateTime(offset)) as P;
     case 2:
+      return (reader.readString(offset)) as P;
+    case 3:
       return (reader.readString(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -191,6 +201,137 @@ extension PatientQueryWhere on QueryBuilder<Patient, Patient, QWhereClause> {
 
 extension PatientQueryFilter
     on QueryBuilder<Patient, Patient, QFilterCondition> {
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideEqualTo(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'affectedSide',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideGreaterThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        include: include,
+        property: r'affectedSide',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideLessThan(
+    String value, {
+    bool include = false,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.lessThan(
+        include: include,
+        property: r'affectedSide',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideBetween(
+    String lower,
+    String upper, {
+    bool includeLower = true,
+    bool includeUpper = true,
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.between(
+        property: r'affectedSide',
+        lower: lower,
+        includeLower: includeLower,
+        upper: upper,
+        includeUpper: includeUpper,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideStartsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.startsWith(
+        property: r'affectedSide',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideEndsWith(
+    String value, {
+    bool caseSensitive = true,
+  }) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.endsWith(
+        property: r'affectedSide',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideContains(
+      String value,
+      {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.contains(
+        property: r'affectedSide',
+        value: value,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideMatches(
+      String pattern,
+      {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.matches(
+        property: r'affectedSide',
+        wildcard: pattern,
+        caseSensitive: caseSensitive,
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition> affectedSideIsEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'affectedSide',
+        value: '',
+      ));
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterFilterCondition>
+      affectedSideIsNotEmpty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.greaterThan(
+        property: r'affectedSide',
+        value: '',
+      ));
+    });
+  }
+
   QueryBuilder<Patient, Patient, QAfterFilterCondition> birthDateEqualTo(
       DateTime value) {
     return QueryBuilder.apply(this, (query) {
@@ -564,6 +705,18 @@ extension PatientQueryLinks
     on QueryBuilder<Patient, Patient, QFilterCondition> {}
 
 extension PatientQuerySortBy on QueryBuilder<Patient, Patient, QSortBy> {
+  QueryBuilder<Patient, Patient, QAfterSortBy> sortByAffectedSide() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'affectedSide', Sort.asc);
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterSortBy> sortByAffectedSideDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'affectedSide', Sort.desc);
+    });
+  }
+
   QueryBuilder<Patient, Patient, QAfterSortBy> sortByBirthDate() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'birthDate', Sort.asc);
@@ -603,6 +756,18 @@ extension PatientQuerySortBy on QueryBuilder<Patient, Patient, QSortBy> {
 
 extension PatientQuerySortThenBy
     on QueryBuilder<Patient, Patient, QSortThenBy> {
+  QueryBuilder<Patient, Patient, QAfterSortBy> thenByAffectedSide() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'affectedSide', Sort.asc);
+    });
+  }
+
+  QueryBuilder<Patient, Patient, QAfterSortBy> thenByAffectedSideDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'affectedSide', Sort.desc);
+    });
+  }
+
   QueryBuilder<Patient, Patient, QAfterSortBy> thenByBirthDate() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'birthDate', Sort.asc);
@@ -654,6 +819,13 @@ extension PatientQuerySortThenBy
 
 extension PatientQueryWhereDistinct
     on QueryBuilder<Patient, Patient, QDistinct> {
+  QueryBuilder<Patient, Patient, QDistinct> distinctByAffectedSide(
+      {bool caseSensitive = true}) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'affectedSide', caseSensitive: caseSensitive);
+    });
+  }
+
   QueryBuilder<Patient, Patient, QDistinct> distinctByBirthDate() {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'birthDate');
@@ -680,6 +852,12 @@ extension PatientQueryProperty
   QueryBuilder<Patient, int, QQueryOperations> idProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'id');
+    });
+  }
+
+  QueryBuilder<Patient, String, QQueryOperations> affectedSideProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'affectedSide');
     });
   }
 

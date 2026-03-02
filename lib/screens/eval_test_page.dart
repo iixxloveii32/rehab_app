@@ -38,6 +38,7 @@ class _EvalTestPageState extends State<EvalTestPage> {
       ..sitToStand = 4
       ..transfer = 3
       ..gait = 2
+      ..patientId = 1
       ..stair = 1;
 
     await isar.writeTxn(() async {

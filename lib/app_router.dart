@@ -6,8 +6,10 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'dart:math' as math;
 import 'package:video_player/video_player.dart';
-import 'screens/eval_test_page.dart';
 import 'package:flutter/foundation.dart';
+import 'screens/feedback_screen.dart';
+import 'screens/results_page.dart';
+import 'screens/exercise_select_page.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
@@ -29,12 +31,16 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) => const ImitationScreen(),
     ),
     GoRoute(
-      path: '/eval-test',
-      builder: (context, state) => const EvalTestPage(),
-    ),
-    GoRoute(
       path: '/feedback',
       builder: (context, state) => const FeedbackScreen(),
+    ),
+    GoRoute(
+      path: '/results',
+      builder: (context, state) => const ResultsPage(),
+    ),
+    GoRoute(
+      path: '/exercise',
+      builder: (context, state) => const ExerciseSelectPage(),
     ),
 
   ],
@@ -53,6 +59,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
   final _nameCtrl = TextEditingController();
 
   String _sex = 'M';
+  String _affectedSide = 'L';
   DateTime? _birthDate;
 
   bool _saving = false;
@@ -110,11 +117,15 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
         name: _nameCtrl.text.trim(),
         sex: _sex,
         birthDate: _birthDate!,
+        affectedSide: _affectedSide,
       );
       final patientId = await PatientStore.saveAndReturnId(patient);
 
       if (!mounted) return;
-      context.go('/record', extra: patientId);
+      context.go('/exercise', extra: {
+        'patientId': patientId,
+        'affectedSide': _affectedSide,
+      });
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -160,6 +171,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                           ),
                           const SizedBox(height: 24),
 
+// ---- 성별 ----
                           Row(
                             children: [
                               const Text('성별: '),
@@ -177,6 +189,28 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                               ),
                             ],
                           ),
+
+                          const SizedBox(height: 12),
+
+// ---- 환측 ----
+                          Row(
+                            children: [
+                              const Text('환측: '),
+                              const SizedBox(width: 8),
+                              ChoiceChip(
+                                label: const Text('좌'),
+                                selected: _affectedSide == 'L',
+                                onSelected: (_) => setState(() => _affectedSide = 'L'),
+                              ),
+                              const SizedBox(width: 8),
+                              ChoiceChip(
+                                label: const Text('우'),
+                                selected: _affectedSide == 'R',
+                                onSelected: (_) => setState(() => _affectedSide = 'R'),
+                              ),
+                            ],
+                          ),
+
                           const SizedBox(height: 12),
 
                           SizedBox(
@@ -186,7 +220,6 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                               child: Text(_birthLabel()),
                             ),
                           ),
-
                           const Spacer(),
 
                           SizedBox(
@@ -310,11 +343,18 @@ class _RecordingScreenState extends State<RecordingScreen> {
       return;
     }
 
-    final patientId = GoRouterState.of(context).extra as int?;
+    final extra = GoRouterState.of(context).extra;
+    final data = (extra is Map) ? extra : null;
+
+    final patientId = data?['patientId'] as int?;
+    final exerciseId = data?['exerciseId'] as int?;
+    final sessionUuid = data?['sessionUuid'] as String?;
 
     context.go('/review', extra: {
       'videoPath': path,
       'patientId': patientId,
+      'exerciseId': exerciseId,
+      'sessionUuid': sessionUuid,
     });
   }
 
@@ -489,9 +529,13 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
                 if (path == null) return;
 
+                final exerciseId = data?['exerciseId'] as int?;
+                final sessionUuid = data?['sessionUuid'] as String?;
                 context.go('/imitate', extra: {
                   'videoPath': path,
                   'patientId': patientId,
+                  'exerciseId': exerciseId,
+                  'sessionUuid': sessionUuid,
                 });
               },
               child: const Text('따라하기(2분할)로'),
@@ -523,6 +567,12 @@ class _ImitationScreenState extends State<ImitationScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
+  }
+  @override
+  void dispose() {
+    _vc?.dispose();
+    _cc?.dispose();
+    super.dispose();
   }
 
   Future<void> _init() async {
@@ -622,10 +672,15 @@ class _ImitationScreenState extends State<ImitationScreen> {
       return;
     }
 
+    final exerciseId = data?['exerciseId'] as int?;
+    final sessionUuid = data?['sessionUuid'] as String?;
+
     context.go('/feedback', extra: {
       'modelPath': modelPath,
       'patientPath': patientPath,
       'patientId': patientId,
+      'exerciseId': exerciseId,
+      'sessionUuid': sessionUuid,
     });
   }
 
@@ -702,26 +757,5 @@ class _ImitationScreenState extends State<ImitationScreen> {
   );
 }
 }
-class FeedbackScreen extends StatelessWidget {
-  const FeedbackScreen({super.key});
 
-  @override
-  Widget build(BuildContext context) {
-    final extra = GoRouterState.of(context).extra;
-    final data = (extra is Map) ? extra : null;
-
-    final modelPath = data?['modelPath'] as String?;
-    final patientPath = data?['patientPath'] as String?;
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('피드백')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          '모델 영상:\n${modelPath ?? "-"}\n\n환자 영상:\n${patientPath ?? "-"}',
-        ),
-      ),
-    );
-  }
-}
 
