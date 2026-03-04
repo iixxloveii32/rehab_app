@@ -6,6 +6,7 @@ import '../models/session_log.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import '../exercises/exercise_definitions.dart';
 
 class ResultsPage extends StatefulWidget {
   const ResultsPage({super.key});
@@ -116,21 +117,7 @@ class _ResultsPageState extends State<ResultsPage> {
     return '$y-$m-$d';
   }
 
-  String _exerciseName(int id) {
-    // TODO: 나중에 ExerciseDefinition으로 교체
-    const names = [
-      '전방 거상',
-      '외전',
-      '팔꿈치 굴곡/신전',
-      '전완 회내/회외',
-      '손목 굴곡/신전',
-      '그립(주먹/펴기)',
-      '엄지-검지 집기',
-      '양손 과제',
-    ];
-    if (id < 0 || id >= names.length) return '운동 $id';
-    return names[id];
-  }
+  String _exerciseName(int id) => Exercises.byId(id).name;
 
   @override
   Widget build(BuildContext context) {

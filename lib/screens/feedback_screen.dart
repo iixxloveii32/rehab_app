@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:isar/isar.dart';
@@ -7,7 +6,11 @@ import '../storage/isar_db.dart';
 import '../models/session_log.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'dart:io';
 
+String _serverBaseUrl() {
+  return 'http://192.168.219.103:5000';
+}
 class FeedbackScreen extends StatefulWidget {
   const FeedbackScreen({super.key});
 
@@ -199,7 +202,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     required String referenceVideoPath,
     required String imitationVideoPath,
   }) async {
-    final uri = Uri.parse('http://192.168.10.107:5000/analyze');
+    final uri = Uri.parse('${_serverBaseUrl()}/analyze');
 
     final req = http.MultipartRequest('POST', uri)
       ..files.add(await http.MultipartFile.fromPath('reference', referenceVideoPath))
@@ -209,6 +212,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     final streamed = await req.send().timeout(const Duration(minutes: 3));
     final resp = await http.Response.fromStream(streamed);
 
+    if (resp.statusCode == 501) {
+      // TODO: 사용자에게 “해당 동작 분석 준비중” 표시
+      throw Exception('해당 동작 분석 알고리즘이 아직 준비되지 않았습니다.');
+    }
     if (resp.statusCode != 200) {
       throw Exception('분석 서버 오류 ${resp.statusCode}: ${resp.body}');
     }
