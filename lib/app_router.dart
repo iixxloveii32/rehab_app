@@ -4,7 +4,6 @@ import 'models/patient.dart';
 import 'storage/patient_store.dart';
 import 'dart:io';
 import 'package:camera/camera.dart';
-import 'dart:math' as math;
 import 'package:video_player/video_player.dart';
 import 'package:flutter/foundation.dart';
 import 'screens/feedback_screen.dart';
@@ -46,7 +45,39 @@ final GoRouter appRouter = GoRouter(
   ],
 );
 
+class _PreviewFrame extends StatelessWidget {
+  final Widget child;
+  final double aspectRatio;
 
+  const _PreviewFrame({
+    super.key,
+    required this.child,
+    required this.aspectRatio,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black,
+      width: double.infinity,
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: aspectRatio,
+          child: ClipRect(child: child),
+        ),
+      ),
+    );
+  }
+}
+double _cameraAspectRatioForScreen(BuildContext context, CameraController c) {
+  final raw = c.value.aspectRatio;
+  final orientation = MediaQuery.of(context).orientation;
+
+  if (orientation == Orientation.portrait) {
+    return 1 / raw;
+  }
+  return raw;
+}
 class PatientFormScreen extends StatefulWidget {
   const PatientFormScreen({super.key});
 
@@ -122,7 +153,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
       final patientId = await PatientStore.saveAndReturnId(patient);
 
       if (!mounted) return;
-      context.go('/exercise', extra: {
+      context.push('/exercise', extra: {
         'patientId': patientId,
         'affectedSide': _affectedSide,
       });
@@ -350,7 +381,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
     final exerciseId = data?['exerciseId'] as int?;
     final sessionUuid = data?['sessionUuid'] as String?;
 
-    context.go('/review', extra: {
+    context.push('/review', extra: {
       'videoPath': path,
       'patientId': patientId,
       'exerciseId': exerciseId,
@@ -370,25 +401,39 @@ class _RecordingScreenState extends State<RecordingScreen> {
           ? const Center(child: Text('카메라를 사용할 수 없습니다.'))
           : Column(
         children: [
-          Expanded(child: CameraPreview(c)),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _toggleRecord,
-                    child: Text(_recording ? '녹화 중지' : '녹화 시작'),
+      Expanded(
+      child: _PreviewFrame(
+      aspectRatio: _cameraAspectRatioForScreen(context, c),
+      child: CameraPreview(c),
+      ),
+    ),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 52,
+                      child: ElevatedButton(
+                        onPressed: _toggleRecord,
+                        child: Text(_recording ? '녹화 중지' : '녹화 시작'),
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _recording ? null : _goNext,
-                    child: const Text('다음(관찰)'),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SizedBox(
+                      height: 52,
+                      child: ElevatedButton(
+                        onPressed: _recording ? null : _goNext,
+                        child: const Text('다음(관찰)'),
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
@@ -489,15 +534,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
           ? const Center(child: CircularProgressIndicator())
           : (vc == null || !vc.value.isInitialized)
           ? const Center(child: Text('영상을 불러오지 못했습니다.'))
-          : Center(
-        child: AspectRatio(
-          aspectRatio: vc.value.aspectRatio,
-          child: Transform(
-            alignment: Alignment.center,
-            transform: Matrix4.identity()
-              ..rotateY(_mirror ? math.pi : 0),
-            child: VideoPlayer(vc),
-          ),
+          : _PreviewFrame(
+        aspectRatio: vc.value.aspectRatio,
+        child: Transform.flip(
+          flipX: _mirror,
+          child: VideoPlayer(vc),
         ),
       ),
 
@@ -531,7 +572,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
                 final exerciseId = data?['exerciseId'] as int?;
                 final sessionUuid = data?['sessionUuid'] as String?;
-                context.go('/imitate', extra: {
+                context.push('/imitate', extra: {
                   'videoPath': path,
                   'patientId': patientId,
                   'exerciseId': exerciseId,
@@ -675,7 +716,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
     final exerciseId = data?['exerciseId'] as int?;
     final sessionUuid = data?['sessionUuid'] as String?;
 
-    context.go('/feedback', extra: {
+    context.push('/feedback', extra: {
       'modelPath': modelPath,
       'patientPath': patientPath,
       'patientId': patientId,
@@ -706,30 +747,41 @@ class _ImitationScreenState extends State<ImitationScreen> {
           ? const Center(child: CircularProgressIndicator())
           : (vc == null || cc == null)
           ? const Center(child: Text('화면을 불러오지 못했습니다.'))
-          : Column(
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                // 관찰 영상
-                Expanded(
-                  child: AspectRatio(
-                    aspectRatio: vc.value.aspectRatio,
-                    child: Transform(
-                      alignment: Alignment.center,
-                      transform: Matrix4.identity()..rotateY(_mirror ? math.pi : 0),
-                      child: VideoPlayer(vc),
-                    ),
-                  ),
-                ),
-                // 셀카 프리뷰
-                Expanded(
-                  child: CameraPreview(cc),
-                ),
-              ],
+          : Builder(
+        builder: (context) {
+          final orientation = MediaQuery.of(context).orientation;
+
+          final modelView = _PreviewFrame(
+            aspectRatio: vc.value.aspectRatio,
+            child: Transform.flip(
+              flipX: _mirror,
+              child: VideoPlayer(vc),
             ),
-          ),
-        ],
+          );
+
+          final patientView = _PreviewFrame(
+            aspectRatio: _cameraAspectRatioForScreen(context, cc),
+            child: CameraPreview(cc),
+          );
+
+          if (orientation == Orientation.portrait) {
+            return Column(
+              children: [
+                Expanded(child: modelView),
+                const Divider(height: 1, thickness: 1),
+                Expanded(child: patientView),
+              ],
+            );
+          } else {
+            return Row(
+              children: [
+                Expanded(child: modelView),
+                const VerticalDivider(width: 1, thickness: 1),
+                Expanded(child: patientView),
+              ],
+            );
+          }
+        },
       ),
 
     bottomNavigationBar: SafeArea(

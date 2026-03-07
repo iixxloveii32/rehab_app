@@ -30,12 +30,12 @@ class ExerciseSelectPage extends StatelessWidget {
                trailing: const Icon(Icons.chevron_right),
                onTap: () {
                  final sessionUuid = DateTime.now().microsecondsSinceEpoch.toString();
-                 context.go('/record', extra: {
+                 context.push('/record', extra: {
                    'patientId': patientId,
                    'exerciseId': it.id,
                    'sessionUuid': sessionUuid,
-              });
-            },
+                 });
+               },
           );
         },
       ),

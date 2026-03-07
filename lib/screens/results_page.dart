@@ -1,12 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:isar/isar.dart';
-import '../storage/isar_db.dart';
-import '../models/session_log.dart';
-import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+
 import '../exercises/exercise_definitions.dart';
+import '../models/session_log.dart';
+import '../storage/isar_db.dart';
 
 class ResultsPage extends StatefulWidget {
   const ResultsPage({super.key});
@@ -21,12 +23,10 @@ class _ResultsPageState extends State<ResultsPage> {
 
   int patientId = -1;
 
-  // 오늘 전체 요약
   int todayCount = 0;
   int todayBest = 0;
   double todayAvg = 0;
 
-  // 동작별 요약 (0~7)
   final Map<int, _ExerciseSummary> byExercise = {
     for (var i = 0; i < 8; i++) i: _ExerciseSummary(),
   };
@@ -52,7 +52,6 @@ class _ResultsPageState extends State<ResultsPage> {
       final todayKey = _dateKey(DateTime.now());
       final isar = IsarDB.instance;
 
-      // 1) 오늘 환자 세션 로그 전부 가져오기 (정렬은 Dart에서)
       final List<SessionLog> logs = await isar.sessionLogs
           .filter()
           .patientIdEqualTo(patientId)
@@ -60,10 +59,8 @@ class _ResultsPageState extends State<ResultsPage> {
           .isReferenceEqualTo(false)
           .findAll();
 
-// 최신순 정렬 (timestampKst 내림차순)
       logs.sort((a, b) => b.timestampKst.compareTo(a.timestampKst));
 
-      // 2) 전체 요약 계산
       todayCount = logs.length;
       if (todayCount == 0) {
         todayBest = 0;
@@ -79,9 +76,8 @@ class _ResultsPageState extends State<ResultsPage> {
         todayAvg = sum / todayCount;
       }
 
-      // 3) 동작별 best/avg/count + (서브 best 2개만)
       for (var i = 0; i < 8; i++) {
-        byExercise[i] = _ExerciseSummary(); // reset
+        byExercise[i] = _ExerciseSummary();
       }
 
       for (final l in logs) {
@@ -91,10 +87,6 @@ class _ResultsPageState extends State<ResultsPage> {
         s.count += 1;
         s.sumOverall += l.overall.toInt();
         if (l.overall > s.bestOverall) s.bestOverall = l.overall;
-
-        // 서브는 best 기준으로만 MVP에 노출(연구용 full export는 나중)
-        if (l.symmetry > s.bestSymmetry) s.bestSymmetry = l.symmetry;
-        if (l.compensation > s.bestCompensation) s.bestCompensation = l.compensation;
 
         byExercise[ex] = s;
       }
@@ -119,12 +111,65 @@ class _ResultsPageState extends State<ResultsPage> {
 
   String _exerciseName(int id) => Exercises.byId(id).name;
 
+  String _scoreComment(double score) {
+    if (score >= 80) return '좋아요';
+    if (score >= 60) return '잘하고 있어요';
+    if (score >= 40) return '조금 더 연습해볼까요';
+    return '천천히 다시 해봐요';
+  }
+
+  Future<void> _exportCsv() async {
+    try {
+      final isar = IsarDB.instance;
+      final logs = await isar.sessionLogs.where().findAll();
+
+      if (logs.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('내보낼 데이터가 없습니다')),
+        );
+        return;
+      }
+
+      final buffer = StringBuffer();
+      buffer.writeln(
+        'patientId,exerciseId,timestampKst,dateKey,overall,symmetry,timing,smoothness,compensation,rom,sessionUuid,appVersion,scoreSchemaVersion',
+      );
+
+      for (final l in logs) {
+        buffer.writeln(
+          '${l.patientId},${l.exerciseId},${l.timestampKst.toIso8601String()},${l.dateKey},${l.overall},${l.symmetry},${l.timing},${l.smoothness},${l.compensation},${l.rom},${l.sessionUuid},${l.appVersion},${l.scoreSchemaVersion}',
+        );
+      }
+
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/rehab_export.csv');
+      await file.writeAsString(buffer.toString(), flush: true);
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: '재활 훈련 데이터 CSV',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('내보내기 실패: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final todayKey = _dateKey(DateTime.now());
     final extra = GoRouterState.of(context).extra;
     final data = (extra is Map) ? extra : null;
-    final patientId = data?['patientId'] as int?;
+    final patientIdFromRoute = data?['patientId'] as int?;
+    final showBottomButton = !loading && error == null && patientIdFromRoute != null;
+
+    final performedExercises = byExercise.entries
+        .where((e) => e.value.count > 0)
+        .toList()
+      ..sort((a, b) => b.value.bestOverall.compareTo(a.value.bestOverall));
 
     return Scaffold(
       appBar: AppBar(
@@ -151,86 +196,83 @@ class _ResultsPageState extends State<ResultsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('오늘($todayKey)', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
+            Text(
+              '오늘의 운동 결과',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              todayKey,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Colors.grey[700],
+              ),
+            ),
+            const SizedBox(height: 12),
             _SummaryCard(
               count: todayCount,
               best: todayBest,
               avg: todayAvg,
             ),
             const SizedBox(height: 16),
-            Text('동작별', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Expanded(
-              child: ListView.separated(
-                itemCount: 8,
-                separatorBuilder: (_, __) => const Divider(height: 1),
-                itemBuilder: (context, i) {
-                  final s = byExercise[i] ?? _ExerciseSummary();
-                  final avg = s.count == 0 ? 0 : (s.sumOverall / s.count);
-                  return ListTile(
-                    title: Text(_exerciseName(i)),
-                    subtitle: Text(
-                      '횟수 ${s.count} | best ${s.bestOverall} | avg ${avg.toStringAsFixed(1)}'
-                          ' | sym best ${s.bestSymmetry} | comp best ${s.bestCompensation}',
-                    ),
-                  );
-                },
+            Text(
+              _scoreComment(todayAvg),
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton(
-                onPressed: patientId == null
-                    ? null
-                    : () => context.go('/exercise', extra: {'patientId': patientId}),
-                child: const Text('다시 운동하기 (동작 선택)'),
+            const SizedBox(height: 16),
+            Text(
+              '오늘 한 운동',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: performedExercises.isEmpty
+                  ? const Center(
+                child: Text('아직 수행한 운동이 없습니다.'),
+              )
+                  : ListView.separated(
+                itemCount: performedExercises.length,
+                separatorBuilder: (_, __) =>
+                const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final entry = performedExercises[index];
+                  final exerciseId = entry.key;
+                  final s = entry.value;
+                  final double avg = s.count == 0 ? 0.0 : s.sumOverall / s.count;
+
+                  return _ExerciseResultCard(
+                    title: _exerciseName(exerciseId),
+                    count: s.count,
+                    best: s.bestOverall,
+                    avg: avg,
+                  );
+                },
               ),
             ),
           ],
         ),
       ),
+      bottomNavigationBar: showBottomButton
+          ? SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton(
+              onPressed: () => context.push(
+                '/exercise',
+                extra: {'patientId': patientIdFromRoute},
+              ),
+              child: const Text('다시 운동하기'),
+            ),
+          ),
+        ),
+      )
+          : null,
     );
-  }
-  Future<void> _exportCsv() async {
-    try {
-      final isar = IsarDB.instance;
-
-      final logs = await isar.sessionLogs.where().findAll();
-
-      if (logs.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('내보낼 데이터가 없습니다')),
-        );
-        return;
-      }
-
-      final buffer = StringBuffer();
-      buffer.writeln(
-          'patientId,exerciseId,timestampKst,dateKey,overall,symmetry,timing,smoothness,compensation,rom,sessionUuid,appVersion,scoreSchemaVersion');
-
-      for (final l in logs) {
-        buffer.writeln(
-            '${l.patientId},${l.exerciseId},${l.timestampKst.toIso8601String()},${l.dateKey},${l.overall},${l.symmetry},${l.timing},${l.smoothness},${l.compensation},${l.rom},${l.sessionUuid},${l.appVersion},${l.scoreSchemaVersion}');
-      }
-
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/rehab_export.csv');
-      await file.writeAsString(buffer.toString(), flush: true);
-
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        text: '재활 훈련 데이터 CSV',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('내보내기 실패: $e')),
-      );
-    }
   }
 }
 
@@ -238,8 +280,6 @@ class _ExerciseSummary {
   int count = 0;
   int sumOverall = 0;
   int bestOverall = 0;
-  int bestSymmetry = 0;
-  int bestCompensation = 0;
 }
 
 class _SummaryCard extends StatelessWidget {
@@ -256,14 +296,102 @@ class _SummaryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
+      elevation: 1,
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Row(
           children: [
-            Expanded(child: Text('총 횟수\n$count', textAlign: TextAlign.center)),
-            Expanded(child: Text('최고점\n$best', textAlign: TextAlign.center)),
-            Expanded(child: Text('평균\n${avg.toStringAsFixed(1)}', textAlign: TextAlign.center)),
+            Expanded(
+              child: _SummaryItem(
+                label: '총 횟수',
+                value: '$count',
+              ),
+            ),
+            Expanded(
+              child: _SummaryItem(
+                label: '최고 점수',
+                value: '$best점',
+              ),
+            ),
+            Expanded(
+              child: _SummaryItem(
+                label: '평균 점수',
+                value: '${avg.toStringAsFixed(1)}점',
+              ),
+            ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SummaryItem extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _SummaryItem({
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ExerciseResultCard extends StatelessWidget {
+  final String title;
+  final int count;
+  final int best;
+  final double avg;
+
+  const _ExerciseResultCard({
+    required this.title,
+    required this.count,
+    required this.best,
+    required this.avg,
+  });
+
+  String _shortComment(double avg) {
+    if (avg >= 80) return '좋아요';
+    if (avg >= 60) return '잘하고 있어요';
+    if (avg >= 40) return '조금 더 연습해보세요';
+    return '천천히 다시 해보세요';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 1,
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        title: Text(
+          title,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Text(
+            '오늘 $count번 했어요\n최고 $best점 · 평균 ${avg.toStringAsFixed(1)}점 · ${_shortComment(avg)}',
+          ),
         ),
       ),
     );

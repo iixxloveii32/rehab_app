@@ -1,16 +1,19 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
-import 'package:isar/isar.dart';
-import '../storage/isar_db.dart';
-import '../models/session_log.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
+import 'package:isar/isar.dart';
+
+import '../models/session_log.dart';
+import '../storage/isar_db.dart';
+
 String _serverBaseUrl() {
-  return 'http://192.168.219.103:5000';
+  return 'http://192.168.10.107:5000';
 }
+
 class FeedbackScreen extends StatefulWidget {
   const FeedbackScreen({super.key});
 
@@ -32,44 +35,222 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   int _compensation = 0;
   int _rom = 0;
 
-  late String _affectedSide;
-  // ✅ B 구조용
+  String _affectedSide = 'L';
   String? _sessionUuid;
   int _attemptIndex = 0;
 
-  List<String> buildCoachingLines(Map<String, dynamic> features) {
-    final side = (features['affectedSide'] ?? _affectedSide).toString();
-    final romAff = (features['rom_aff'] is num) ? (features['rom_aff'] as num).toDouble() : null;
-    final trunkDelta = (features['trunkDeltaDeg'] is num) ? (features['trunkDeltaDeg'] as num).toDouble() : 0.0;
-    final shrugDelta = (features['shrugDelta'] is num) ? (features['shrugDelta'] as num).toDouble() : 0.0;
-    final symDiff = (features['imi_symmetryDiffDeg'] is num) ? (features['imi_symmetryDiffDeg'] as num).toDouble() : 0.0;
+  Map<String, dynamic> _lastFeatures = {};
+  Map<String, dynamic> _lastQuality = {};
 
-    final sideKr = (side == 'R') ? '오른쪽(환측)' : '왼쪽(환측)';
-    final lines = <String>[];
-
-    if (romAff != null) {
-      lines.add('$sideKr 거상 범위(ROM)가 기준 대비 ${romAff.toStringAsFixed(0)}% 입니다.');
-      if (romAff < 60) {
-        lines.add('팔을 더 높이 들어 올리는 연습이 필요합니다. (가능한 범위에서 천천히)');
-      } else if (romAff < 80) {
-        lines.add('거상 범위가 조금 부족합니다. 끝범위에서 1초 멈춤을 시도해보세요.');
-      } else {
-        lines.add('거상 범위가 좋습니다. 같은 높이를 안정적으로 반복해보세요.');
-      }
+  String _exerciseTitle() {
+    switch (_exerciseId) {
+      case 0:
+        return '팔 앞으로 들기';
+      case 1:
+        return '팔 옆으로 들기';
+      case 2:
+        return '머리 만지기';
+      case 3:
+        return '허리 뒤로 손 가져가기';
+      case 4:
+        return '앞 물건 잡기';
+      case 5:
+        return '옆 물건 잡기';
+      case 6:
+        return '팔 굽히기';
+      case 7:
+        return '팔 펴기';
+      default:
+        return '운동';
     }
+  }
 
-    if (trunkDelta >= 8) lines.add('몸통 기울기 보상이 증가했습니다(+${trunkDelta.toStringAsFixed(0)}°). 몸통을 고정해보세요.');
-    if (shrugDelta >= 0.08) lines.add('어깨 으쓱(승모근) 보상이 증가했습니다. 어깨를 내리고 팔을 들어보세요.');
-    if (symDiff >= 12) lines.add('좌우 높이 차이가 큽니다(${symDiff.toStringAsFixed(0)}°). 가능한 같은 높이로 맞춰보세요.');
-
-    if (lines.length > 4) return lines.take(4).toList();
-    return lines;
+  String _romLabel() {
+    switch (_exerciseId) {
+      case 0:
+        return '팔 올리기';
+      case 1:
+        return '옆으로 올리기';
+      case 2:
+        return '머리까지 닿기';
+      case 3:
+        return '허리 뒤로 가기';
+      case 4:
+        return '앞으로 뻗기';
+      case 5:
+        return '옆으로 뻗기';
+      case 6:
+        return '팔 굽히기';
+      case 7:
+        return '팔 펴기';
+      default:
+        return '팔 움직임';
+    }
   }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _saveScore());
+  }
+
+  List<String> buildCoachingLines(Map<String, dynamic> features) {
+    final side = (features['affectedSide'] as String?) ?? _affectedSide;
+    final sideKr = (side == 'R') ? '오른쪽 팔' : '왼쪽 팔';
+
+    final romAff = (features['rom_aff'] is num)
+        ? (features['rom_aff'] as num).toDouble()
+        : null;
+    final trunkDelta = (features['trunkDeltaDeg'] is num)
+        ? (features['trunkDeltaDeg'] as num).toDouble()
+        : 0.0;
+    final shrugDelta = (features['shrugDelta'] is num)
+        ? (features['shrugDelta'] as num).toDouble()
+        : 0.0;
+    final symDiff = (features['imi_symmetryDiffDeg'] is num)
+        ? (features['imi_symmetryDiffDeg'] as num).toDouble()
+        : 0.0;
+
+    final lines = <String>[];
+
+    switch (_exerciseId) {
+      case 0: // 팔 앞으로 들기
+        if (romAff != null) {
+          if (romAff < 40) {
+            lines.add('$sideKr을 몸 앞쪽으로 조금 더 높게 들어 보세요.');
+          } else if (romAff < 70) {
+            lines.add('$sideKr을 앞쪽으로 조금 더 끝까지 올려 보세요.');
+          } else {
+            lines.add('$sideKr을 앞쪽으로 잘 들어 올렸어요.');
+          }
+        }
+        break;
+
+      case 1: // 팔 옆으로 들기
+        if (romAff != null) {
+          if (romAff < 40) {
+            lines.add('$sideKr을 몸 옆으로 조금 더 벌려 보세요.');
+          } else if (romAff < 70) {
+            lines.add('$sideKr을 옆으로 조금 더 높게 올려 보세요.');
+          } else {
+            lines.add('$sideKr을 옆으로 잘 들어 올렸어요.');
+          }
+        }
+        break;
+
+      case 2: // 머리 만지기
+        if (romAff != null) {
+          if (romAff < 40) {
+            lines.add('$sideKr 손이 머리 쪽으로 조금 더 가까이 가면 좋아요.');
+          } else if (romAff < 70) {
+            lines.add('$sideKr 손을 머리 쪽으로 조금 더 올려 보세요.');
+          } else {
+            lines.add('$sideKr 손이 머리 쪽으로 잘 올라갔어요.');
+          }
+        }
+        break;
+
+      case 3: // 허리 뒤로 손 가져가기
+        if (romAff != null) {
+          if (romAff < 40) {
+            lines.add('$sideKr 손을 허리 뒤쪽으로 조금 더 보내 보세요.');
+          } else if (romAff < 70) {
+            lines.add('$sideKr 손이 허리 뒤로 조금 더 가면 좋아요.');
+          } else {
+            lines.add('$sideKr 손이 허리 뒤로 잘 이동했어요.');
+          }
+        }
+        break;
+
+      case 4: // 앞 물건 잡기
+        if (romAff != null) {
+          if (romAff < 40) {
+            lines.add('$sideKr을 앞쪽으로 조금 더 뻗어 보세요.');
+          } else if (romAff < 70) {
+            lines.add('$sideKr을 앞 목표까지 조금 더 뻗어 보세요.');
+          } else {
+            lines.add('$sideKr을 앞쪽으로 잘 뻗었어요.');
+          }
+        }
+        break;
+
+      case 5: // 옆 물건 잡기
+        if (romAff != null) {
+          if (romAff < 40) {
+            lines.add('$sideKr을 옆쪽으로 조금 더 뻗어 보세요.');
+          } else if (romAff < 70) {
+            lines.add('$sideKr을 옆 목표까지 조금 더 뻗어 보세요.');
+          } else {
+            lines.add('$sideKr을 옆쪽으로 잘 뻗었어요.');
+          }
+        }
+        break;
+
+      case 6: // 팔 굽히기
+        if (romAff != null) {
+          if (romAff < 40) {
+            lines.add('$sideKr을 조금 더 굽혀 보세요.');
+          } else if (romAff < 70) {
+            lines.add('$sideKr을 몸 쪽으로 조금 더 당겨 보세요.');
+          } else {
+            lines.add('$sideKr 굽히기가 잘 되었어요.');
+          }
+        }
+        break;
+
+      case 7: // 팔 펴기
+        if (romAff != null) {
+          if (romAff < 40) {
+            lines.add('$sideKr을 조금 더 곧게 펴 보세요.');
+          } else if (romAff < 70) {
+            lines.add('$sideKr을 끝까지 조금 더 펴 보세요.');
+          } else {
+            lines.add('$sideKr 펴기가 잘 되었어요.');
+          }
+        }
+        break;
+
+      default:
+        if (romAff != null) {
+          if (romAff < 60) {
+            lines.add('$sideKr 움직임을 조금 더 크게 해보세요.');
+          } else {
+            lines.add('$sideKr 움직임이 좋아요.');
+          }
+        }
+    }
+
+    if (trunkDelta >= 8) {
+      lines.add('상체가 함께 많이 움직였어요. 몸통을 조금 더 고정해 보세요.');
+    }
+
+    if (shrugDelta >= 0.08) {
+      lines.add('어깨에 힘이 많이 들어갔어요. 어깨를 내리고 편하게 해보세요.');
+    }
+
+    if (symDiff >= 12) {
+      lines.add('좌우 차이가 조금 커요. 가능한 비슷한 높이와 범위로 맞춰보세요.');
+    }
+
+    if (lines.isEmpty) {
+      lines.add('좋아요. 지금처럼 천천히 한 번 더 해보세요.');
+    }
+
+    return lines.take(3).toList();
+  }
+
+  String _scoreLabel(int score) {
+    if (score >= 80) return '좋아요';
+    if (score >= 60) return '잘하고 있어요';
+    if (score >= 40) return '조금 더 연습해봐요';
+    return '천천히 다시 해봐요';
+  }
+
+  Color _scoreColor(BuildContext context, int score) {
+    if (score >= 80) return Colors.green;
+    if (score >= 60) return Colors.blue;
+    if (score >= 40) return Colors.orange;
+    return Colors.redAccent;
   }
 
   Future<void> _saveScore() async {
@@ -80,11 +261,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _affectedSide = affectedSide;
 
       final patientId = data?['patientId'] as int?;
-      final modelPath = data?['modelPath'] as String?;   // reference
-      final patientPath = data?['patientPath'] as String?; // imitation
+      final modelPath = data?['modelPath'] as String?;
+      final patientPath = data?['patientPath'] as String?;
       final exerciseId = (data?['exerciseId'] as int?) ?? 0;
-
-      // (옵션) 상위 화면에서 sessionUuid를 넘기고 있으면 그걸 사용
       final incomingSessionUuid = data?['sessionUuid'] as String?;
 
       if (patientId == null) throw Exception('patientId가 없습니다.');
@@ -94,17 +273,15 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _patientId = patientId;
       _exerciseId = exerciseId;
 
-      final now = DateTime.now(); // 현재 KST 환경 전제
+      final now = DateTime.now();
       final todayKey = _dateKey(now);
 
-      // ✅ sessionUuid는 "ref + imit"을 묶는 키 (한 번 정하면 고정)
-      final sessionUuid = incomingSessionUuid ?? DateTime.now().microsecondsSinceEpoch.toString();
+      final sessionUuid =
+          incomingSessionUuid ?? DateTime.now().microsecondsSinceEpoch.toString();
       _sessionUuid = sessionUuid;
 
       final isar = IsarDB.instance;
 
-      // ✅ imitation attemptIndex 계산: 오늘/환자/동작에서 imitation 로그 개수 + 1
-      // (ref는 제외)
       final existingImitLogs = await isar.sessionLogs
           .filter()
           .patientIdEqualTo(patientId)
@@ -114,10 +291,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           .findAll();
 
       final attemptIndex = existingImitLogs.length + 1;
-
       _attemptIndex = attemptIndex;
 
-      // ✅ Mock 분석(서버 없이도 "파일이 같으면 점수도 같게")
       final result = await _analyzeViaServer(
         referenceVideoPath: modelPath,
         imitationVideoPath: patientPath,
@@ -129,9 +304,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _compensation = result.compensation;
       _rom = result.rom;
       _overall = result.overall;
+      _lastFeatures = result.features;
+      _lastQuality = result.quality;
 
-      // ✅ 1) reference 로그: 하루에 여러 번 찍을 수 있으니 "sessionUuid 기준으로 1개만" 저장
-      // 이미 같은 sessionUuid로 ref가 저장되어 있으면 스킵
       final existingRefs = await isar.sessionLogs
           .filter()
           .sessionUuidEqualTo(sessionUuid)
@@ -140,7 +315,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       final refExists = existingRefs.isNotEmpty;
 
-      // ✅ 2) imitation 로그: 매 시도마다 저장
       final refLog = SessionLog()
         ..patientId = patientId
         ..exerciseId = exerciseId
@@ -188,7 +362,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       if (!mounted) return;
       setState(() => _saving = false);
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('FeedbackScreen _saveScore error: $e');
+      debugPrintStack(stackTrace: st);
+
       if (!mounted) return;
       setState(() {
         _saving = false;
@@ -197,23 +374,33 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     }
   }
 
-  // 파일 기반 “일관된” mock 분석
   Future<_MockResult> _analyzeViaServer({
     required String referenceVideoPath,
     required String imitationVideoPath,
   }) async {
-    final uri = Uri.parse('${_serverBaseUrl()}/analyze');
+    final baseUrl = _serverBaseUrl();
+    final uri = Uri.parse('$baseUrl/analyze');
+
+    debugPrint('SERVER baseUrl = $baseUrl');
+    debugPrint('SERVER uri = $uri');
+    debugPrint('reference path = $referenceVideoPath');
+    debugPrint('imitation path = $imitationVideoPath');
 
     final req = http.MultipartRequest('POST', uri)
       ..files.add(await http.MultipartFile.fromPath('reference', referenceVideoPath))
       ..files.add(await http.MultipartFile.fromPath('imitation', imitationVideoPath))
       ..fields['exerciseId'] = _exerciseId.toString()
       ..fields['affectedSide'] = _affectedSide;
-    final streamed = await req.send().timeout(const Duration(minutes: 3));
+
+    debugPrint('sending request to server...');
+
+    final streamed = await req.send().timeout(const Duration(seconds: 15));
     final resp = await http.Response.fromStream(streamed);
 
+    debugPrint('server status = ${resp.statusCode}');
+    debugPrint('server body = ${resp.body}');
+
     if (resp.statusCode == 501) {
-      // TODO: 사용자에게 “해당 동작 분석 준비중” 표시
       throw Exception('해당 동작 분석 알고리즘이 아직 준비되지 않았습니다.');
     }
     if (resp.statusCode != 200) {
@@ -222,25 +409,20 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
     final j = jsonDecode(resp.body) as Map<String, dynamic>;
 
-    final features = (j['features'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
-    final quality = (j['quality'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final features =
+        (j['features'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final quality =
+        (j['quality'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
 
     int asInt(dynamic v) => (v is num) ? v.round() : int.parse(v.toString());
 
-    final overall = asInt(j['overall']);
-    final symmetry = asInt(j['symmetry']);
-    final timing = asInt(j['timing']);
-    final smoothness = asInt(j['smoothness']);
-    final compensation = asInt(j['compensation']);
-    final rom = asInt(j['rom']);
-
     return _MockResult(
-      overall: overall,
-      symmetry: symmetry,
-      timing: timing,
-      smoothness: smoothness,
-      compensation: compensation,
-      rom: rom,
+      overall: asInt(j['overall']),
+      symmetry: asInt(j['symmetry']),
+      timing: asInt(j['timing']),
+      smoothness: asInt(j['smoothness']),
+      compensation: asInt(j['compensation']),
+      rom: asInt(j['rom']),
       quality: quality,
       features: features,
     );
@@ -255,40 +437,176 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final showBottomButton = !_saving && _error == null;
+    final coachingLines = buildCoachingLines(_lastFeatures);
+    final needRetake = _lastQuality['needsRetake'] == true;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('피드백')),
+      appBar: AppBar(title: Text('${_exerciseTitle()} 결과')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: _saving
             ? const Center(child: CircularProgressIndicator())
             : (_error != null)
-            ? Text('저장 실패: $_error')
-            : Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+            ? Center(
+          child: Text(
+            '결과를 불러오지 못했습니다.\n$_error',
+            textAlign: TextAlign.center,
+          ),
+        )
+            : ListView(
           children: [
-            Text('저장 완료 (patientId=$_patientId, exerciseId=$_exerciseId)'),
+            _OverallScoreCard(
+              score: _overall,
+              label: _scoreLabel(_overall),
+              color: _scoreColor(context, _overall),
+            ),
             const SizedBox(height: 8),
-            Text('sessionUuid: $_sessionUuid'),
-            Text('attemptIndex: $_attemptIndex'),
-            const SizedBox(height: 12),
-            Text('overall: $_overall'),
-            Text('symmetry: $_symmetry'),
-            Text('timing: $_timing'),
-            Text('smoothness: $_smoothness'),
-            Text('compensation: $_compensation'),
-            Text('rom: $_rom'),
-            Text('DEBUG affectedSide=$_affectedSide'),
-            const Spacer(),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  context.go('/results', extra: {
-                    'patientId': _patientId,
-                  });
-                },
-                child: const Text('결과 보기'),
+            Center(
+              child: Text(
+                _exerciseTitle(),
+                style: Theme.of(context).textTheme.titleMedium,
               ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: _MiniScoreCard(
+                    title: _romLabel(),
+                    score: _rom,
+                    icon: Icons.swipe_up_alt,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _MiniScoreCard(
+                    title: '좌우 균형',
+                    score: _symmetry,
+                    icon: Icons.balance,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _MiniScoreCard(
+              title: '몸통 안정성',
+              score: _compensation,
+              icon: Icons.accessibility_new,
+            ),
+            const SizedBox(height: 16),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '오늘의 안내',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 10),
+                    ...coachingLines.map(
+                          (line) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('• '),
+                            Expanded(child: Text(line)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (needRetake) ...[
+              const SizedBox(height: 12),
+              Card(
+                color: Colors.orange.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.warning_amber_rounded),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '움직임이 작거나 화면 인식이 어려웠어요. 다시 한 번 천천히 촬영해 보세요.',
+                          style: TextStyle(
+                            color: Colors.orange.shade900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      bottomNavigationBar: showBottomButton
+          ? SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton(
+              onPressed: () {
+                context.push('/results', extra: {
+                  'patientId': _patientId,
+                });
+              },
+              child: const Text('결과 보기'),
+            ),
+          ),
+        ),
+      )
+          : null,
+    );
+  }
+}
+
+class _OverallScoreCard extends StatelessWidget {
+  final int score;
+  final String label;
+  final Color color;
+
+  const _OverallScoreCard({
+    required this.score,
+    required this.label,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+        child: Column(
+          children: [
+            Text(
+              '전체 점수',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '$score점',
+              style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.titleSmall,
             ),
           ],
         ),
@@ -297,8 +615,61 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 }
 
+class _MiniScoreCard extends StatelessWidget {
+  final String title;
+  final int score;
+  final IconData icon;
+
+  const _MiniScoreCard({
+    required this.title,
+    required this.score,
+    required this.icon,
+  });
+
+  String _comment(int score) {
+    if (score >= 80) return '좋아요';
+    if (score >= 60) return '보통';
+    return '연습 필요';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
+        child: Column(
+          children: [
+            Icon(icon, size: 28),
+            const SizedBox(height: 8),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '$score점',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(_comment(score)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _MockResult {
-  final int overall, symmetry, timing, smoothness, compensation, rom;
+  final int overall;
+  final int symmetry;
+  final int timing;
+  final int smoothness;
+  final int compensation;
+  final int rom;
   final Map<String, dynamic> quality;
   final Map<String, dynamic> features;
 
