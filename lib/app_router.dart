@@ -9,6 +9,8 @@ import 'package:flutter/foundation.dart';
 import 'screens/feedback_screen.dart';
 import 'screens/results_page.dart';
 import 'screens/exercise_select_page.dart';
+import 'utils/side_instruction.dart';
+import 'exercises/exercise_definitions.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
@@ -380,12 +382,14 @@ class _RecordingScreenState extends State<RecordingScreen> {
     final patientId = data?['patientId'] as int?;
     final exerciseId = data?['exerciseId'] as int?;
     final sessionUuid = data?['sessionUuid'] as String?;
+    final affectedSide = data?['affectedSide'] as String?;
 
     context.push('/review', extra: {
       'videoPath': path,
       'patientId': patientId,
       'exerciseId': exerciseId,
       'sessionUuid': sessionUuid,
+      'affectedSide': affectedSide,
     });
   }
 
@@ -567,6 +571,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
                 final path = data?['videoPath'] as String?;
                 final patientId = data?['patientId'] as int?;
+                final affectedSide = data?['affectedSide'] as String?;
 
                 if (path == null) return;
 
@@ -577,6 +582,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
                   'patientId': patientId,
                   'exerciseId': exerciseId,
                   'sessionUuid': sessionUuid,
+                  'affectedSide': affectedSide,
                 });
               },
               child: const Text('따라하기(2분할)로'),
@@ -621,7 +627,6 @@ class _ImitationScreenState extends State<ImitationScreen> {
     final data = (extra is Map) ? extra : null;
 
     final path = data?['videoPath'] as String?;
-    final patientId = data?['patientId'] as int?;
     if (path == null || path.isEmpty || !File(path).existsSync()) {
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -697,6 +702,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
 
     final modelPath = data?['videoPath'] as String?;
     final patientId = data?['patientId'] as int?;
+    final affectedSide = data?['affectedSide'] as String?;
 
     final patientPath = _patientVideo?.path;
 
@@ -722,6 +728,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
       'patientId': patientId,
       'exerciseId': exerciseId,
       'sessionUuid': sessionUuid,
+      'affectedSide': affectedSide,
     });
   }
 

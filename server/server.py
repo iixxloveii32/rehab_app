@@ -1,5 +1,4 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse
 import uvicorn
 import cv2
 import mediapipe as mp
@@ -132,6 +131,12 @@ def _opp_side_name(side: str) -> str:
     return "right" if side.upper() == "L" else "left"
 
 
+def _affected_unaffected_side_names(affected_side: str) -> Tuple[str, str]:
+    affected = _side_name(affected_side)
+    unaffected = _opp_side_name(affected_side)
+    return affected, unaffected
+
+
 def _no_motion_response(
     *,
     affectedSide: str,
@@ -171,6 +176,62 @@ def _no_motion_response(
     return scores, feature_payload, quality_json
 
 
+def _wrong_side_response(
+    *,
+    affectedSide: str,
+    algo: str,
+    ref: Dict[str, Any],
+    imi: Dict[str, Any],
+    features: Dict[str, Any],
+) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
+    return _no_motion_response(
+        affectedSide=affectedSide,
+        reason="wrong_side_performed",
+        algo=algo,
+        ref=ref,
+        imi=imi,
+        features={
+            "wrongSidePerformed": True,
+            **features,
+        },
+        overall=3,
+        compensation=15,
+    )
+
+
+def _wrong_reference_side_response(
+    *,
+    affectedSide: str,
+    algo: str,
+    ref: Dict[str, Any],
+    imi: Dict[str, Any],
+    features: Dict[str, Any],
+) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
+    return _no_motion_response(
+        affectedSide=affectedSide,
+        reason="wrong_reference_side_performed",
+        algo=algo,
+        ref=ref,
+        imi=imi,
+        features={
+            "wrongReferenceSidePerformed": True,
+            **features,
+        },
+        overall=3,
+        compensation=15,
+    )
+
+
+def _wrong_side_by_smaller_is_better(
+    *,
+    aff_value: float,
+    unaff_value: float,
+    aff_max_threshold: float,
+    dominance_ratio: float = 0.85,
+) -> bool:
+    return aff_value > aff_max_threshold and unaff_value < aff_value * dominance_ratio
+
+
 # =========================================================
 # exercise registry
 # =========================================================
@@ -179,49 +240,49 @@ EXERCISES = {
         "name": "팔 앞으로 들기",
         "code": "shoulder_flexion",
         "label": "팔 앞으로 들기",
-        "algo": "shoulder_flexion_v1",
+        "algo": "shoulder_flexion_v5",
     },
     1: {
         "name": "팔 옆으로 들기",
         "code": "shoulder_abduction",
         "label": "팔 옆으로 들기",
-        "algo": "shoulder_abduction_v1",
+        "algo": "shoulder_abduction_v5",
     },
     2: {
         "name": "머리 만지기",
         "code": "hand_to_head",
         "label": "머리 만지기",
-        "algo": "hand_to_head_v1",
+        "algo": "hand_to_head_v5",
     },
     3: {
         "name": "허리 뒤로 손 가져가기",
         "code": "hand_to_back",
         "label": "허리 뒤로 손 가져가기",
-        "algo": "hand_to_back_v1",
+        "algo": "hand_to_back_v5",
     },
     4: {
         "name": "앞 물건 잡기",
         "code": "reach_forward",
         "label": "앞 물건 잡기",
-        "algo": "reach_forward_v1",
+        "algo": "reach_forward_v5",
     },
     5: {
         "name": "옆 물건 잡기",
         "code": "reach_side",
         "label": "옆 물건 잡기",
-        "algo": "reach_side_v1",
+        "algo": "reach_side_v5",
     },
     6: {
         "name": "팔 굽히기",
         "code": "elbow_flexion",
         "label": "팔 굽히기",
-        "algo": "elbow_flexion_v1",
+        "algo": "elbow_flexion_v5",
     },
     7: {
         "name": "팔 펴기",
         "code": "elbow_extension",
         "label": "팔 펴기",
-        "algo": "elbow_extension_v1",
+        "algo": "elbow_extension_v5",
     },
 }
 
@@ -323,9 +384,7 @@ def extract_pose_features(
         lhip2, rhip2 = p2(L_HIP), p2(R_HIP)
 
         lsh3, rsh3 = p3(L_SH), p3(R_SH)
-        lel3, rel3 = p3(L_EL), p3(R_EL)
         lwr3, rwr3 = p3(L_WR), p3(R_WR)
-        lhip3, rhip3 = p3(L_HIP), p3(R_HIP)
 
         sh_mid2 = 0.5 * (lsh2 + rsh2)
         hip_mid2 = 0.5 * (lhip2 + rhip2)
@@ -346,6 +405,7 @@ def extract_pose_features(
         l_trunk = lhip2 - lsh2
         r_upper = rel2 - rsh2
         r_trunk = rhip2 - rsh2
+
         if np.linalg.norm(l_upper) > 1e-6 and np.linalg.norm(l_trunk) > 1e-6:
             left_shoulder_elev.append(_angle_deg(l_upper, l_trunk))
         if np.linalg.norm(r_upper) > 1e-6 and np.linalg.norm(r_trunk) > 1e-6:
@@ -355,6 +415,7 @@ def extract_pose_features(
         lv2 = lwr2 - lel2
         rv1 = rsh2 - rel2
         rv2 = rwr2 - rel2
+
         if np.linalg.norm(lv1) > 1e-6 and np.linalg.norm(lv2) > 1e-6:
             left_elbow_flex.append(_angle_deg(lv1, lv2))
         if np.linalg.norm(rv1) > 1e-6 and np.linalg.norm(rv2) > 1e-6:
@@ -429,44 +490,79 @@ def score_shoulder_flexion(
     imi: Dict[str, Any],
     affectedSide: str,
 ) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
-    side = _side_name(affectedSide)
-    opp = _opp_side_name(affectedSide)
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
     quality = _quality_score(ref, imi)
 
-    ref_peak = ref[f"{side}ShoulderElev"]["max"]
-    imi_peak = imi[f"{side}ShoulderElev"]["max"]
-    opp_peak = imi[f"{opp}ShoulderElev"]["max"]
+    ref_peak = ref[f"{unaff}ShoulderElev"]["max"]
+    ref_aff_peak = ref[f"{aff}ShoulderElev"]["max"]
+    imi_peak = imi[f"{aff}ShoulderElev"]["max"]
+    imi_unaff_peak = imi[f"{unaff}ShoulderElev"]["max"]
 
+    ref_motion_threshold = 25.0
     no_motion_threshold = 25.0
+    required_gap_deg = 10.0
+
+    # reference는 건측이 환측보다 분명히 더 커야 통과
+    if (ref_peak < ref_motion_threshold) or (ref_peak <= ref_aff_peak + required_gap_deg):
+        return _wrong_reference_side_response(
+            affectedSide=affectedSide,
+            algo="shoulder_flexion_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffShoulderElevMax": ref_peak,
+                "ref_affShoulderElevMax": ref_aff_peak,
+                "referenceMotionThresholdDeg": ref_motion_threshold,
+                "referenceRequiredGapDeg": required_gap_deg,
+            },
+        )
+
     if imi_peak < no_motion_threshold:
         return _no_motion_response(
             affectedSide=affectedSide,
             reason="no_meaningful_shoulder_flexion_detected",
-            algo="shoulder_flexion_v1",
+            algo="shoulder_flexion_v5",
             ref=ref,
             imi=imi,
             features={
-                "ref_affShoulderElevMax": ref_peak,
+                "ref_unaffShoulderElevMax": ref_peak,
                 "imi_affShoulderElevMax": imi_peak,
+                "imi_unaffShoulderElevMax": imi_unaff_peak,
                 "motionThresholdDeg": no_motion_threshold,
             },
         )
 
+    # imitation은 환측이 건측보다 분명히 더 커야 통과
+    if imi_peak <= imi_unaff_peak + required_gap_deg:
+        return _wrong_side_response(
+            affectedSide=affectedSide,
+            algo="shoulder_flexion_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffShoulderElevMax": ref_peak,
+                "imi_affShoulderElevMax": imi_peak,
+                "imi_unaffShoulderElevMax": imi_unaff_peak,
+                "motionThresholdDeg": no_motion_threshold,
+                "imitationRequiredGapDeg": required_gap_deg,
+            },
+        )
+
     rom = _ratio_score(imi_peak, ref_peak)
-    symmetry = max(0.0, 100.0 - (abs(imi_peak - opp_peak) * 2.5))
+    symmetry = max(0.0, 100.0 - (abs(imi_peak - ref_peak) * 2.0))
     comp, trunk_delta, shrug_delta = _compensation_score(ref, imi, trunk_weight=0.6, shrug_weight=0.4)
 
-    ref_series = ref["_series"][f"{side}ShoulderElev"]
-    imi_series = imi["_series"][f"{side}ShoulderElev"]
+    ref_series = ref["_series"][f"{unaff}ShoulderElev"]
+    imi_series = imi["_series"][f"{aff}ShoulderElev"]
     timing = _timing_score_from_series(ref_series, imi_series, quality)
     smoothness = _smoothness_score_from_series(imi_series, quality)
 
     overall = (
         0.40 * rom +
-        0.25 * comp +
         0.20 * symmetry +
-        0.10 * smoothness +
-        0.05 * timing
+        0.25 * comp +
+        0.05 * timing +
+        0.10 * smoothness
     )
 
     scores = {
@@ -482,10 +578,11 @@ def score_shoulder_flexion(
         "affectedSide": affectedSide,
         "motionDetected": True,
         "rom_aff": float(rom),
-        "ref_affShoulderElevMax": ref_peak,
+        "ref_unaffShoulderElevMax": ref_peak,
+        "ref_affShoulderElevMax": ref_aff_peak,
         "imi_affShoulderElevMax": imi_peak,
-        "imi_oppShoulderElevMax": opp_peak,
-        "imi_symmetryDiffDeg": abs(imi_peak - opp_peak),
+        "imi_unaffShoulderElevMax": imi_unaff_peak,
+        "reference_imitationDiffDeg": abs(imi_peak - ref_peak),
         "ref_trunkLeanMaxDeg": ref["trunkLean"]["max"],
         "imi_trunkLeanMaxDeg": imi["trunkLean"]["max"],
         "ref_shrugRatioMean": ref["shrugRatio"]["mean"],
@@ -503,7 +600,7 @@ def score_shoulder_flexion(
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
         "framesUsed_imi": imi["framesUsed"],
-        "algo": "shoulder_flexion_v1",
+        "algo": "shoulder_flexion_v5",
     }
 
     return scores, features, quality_json
@@ -514,44 +611,77 @@ def score_shoulder_abduction(
     imi: Dict[str, Any],
     affectedSide: str,
 ) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
-    side = _side_name(affectedSide)
-    opp = _opp_side_name(affectedSide)
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
     quality = _quality_score(ref, imi)
 
-    ref_peak = ref[f"{side}ShoulderElev"]["max"]
-    imi_peak = imi[f"{side}ShoulderElev"]["max"]
-    opp_peak = imi[f"{opp}ShoulderElev"]["max"]
+    ref_peak = ref[f"{unaff}ShoulderElev"]["max"]
+    ref_aff_peak = ref[f"{aff}ShoulderElev"]["max"]
+    imi_peak = imi[f"{aff}ShoulderElev"]["max"]
+    imi_unaff_peak = imi[f"{unaff}ShoulderElev"]["max"]
 
+    ref_motion_threshold = 25.0
     no_motion_threshold = 25.0
+    required_gap_deg = 10.0
+
+    if (ref_peak < ref_motion_threshold) or (ref_peak <= ref_aff_peak + required_gap_deg):
+        return _wrong_reference_side_response(
+            affectedSide=affectedSide,
+            algo="shoulder_abduction_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffShoulderElevMax": ref_peak,
+                "ref_affShoulderElevMax": ref_aff_peak,
+                "referenceMotionThresholdDeg": ref_motion_threshold,
+                "referenceRequiredGapDeg": required_gap_deg,
+            },
+        )
+
     if imi_peak < no_motion_threshold:
         return _no_motion_response(
             affectedSide=affectedSide,
             reason="no_meaningful_shoulder_abduction_detected",
-            algo="shoulder_abduction_v1",
+            algo="shoulder_abduction_v5",
             ref=ref,
             imi=imi,
             features={
-                "ref_affShoulderElevMax": ref_peak,
+                "ref_unaffShoulderElevMax": ref_peak,
                 "imi_affShoulderElevMax": imi_peak,
+                "imi_unaffShoulderElevMax": imi_unaff_peak,
                 "motionThresholdDeg": no_motion_threshold,
             },
         )
 
+    if imi_peak <= imi_unaff_peak + required_gap_deg:
+        return _wrong_side_response(
+            affectedSide=affectedSide,
+            algo="shoulder_abduction_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffShoulderElevMax": ref_peak,
+                "imi_affShoulderElevMax": imi_peak,
+                "imi_unaffShoulderElevMax": imi_unaff_peak,
+                "motionThresholdDeg": no_motion_threshold,
+                "imitationRequiredGapDeg": required_gap_deg,
+            },
+        )
+
     rom = _ratio_score(imi_peak, ref_peak)
-    symmetry = max(0.0, 100.0 - (abs(imi_peak - opp_peak) * 2.5))
+    symmetry = max(0.0, 100.0 - (abs(imi_peak - ref_peak) * 2.0))
     comp, trunk_delta, shrug_delta = _compensation_score(ref, imi, trunk_weight=0.55, shrug_weight=0.45)
 
-    ref_series = ref["_series"][f"{side}ShoulderElev"]
-    imi_series = imi["_series"][f"{side}ShoulderElev"]
+    ref_series = ref["_series"][f"{unaff}ShoulderElev"]
+    imi_series = imi["_series"][f"{aff}ShoulderElev"]
     timing = _timing_score_from_series(ref_series, imi_series, quality)
     smoothness = _smoothness_score_from_series(imi_series, quality)
 
     overall = (
-        0.35 * rom +
-        0.30 * comp +
+        0.40 * rom +
         0.20 * symmetry +
-        0.10 * smoothness +
-        0.05 * timing
+        0.25 * comp +
+        0.05 * timing +
+        0.10 * smoothness
     )
 
     scores = {
@@ -567,10 +697,11 @@ def score_shoulder_abduction(
         "affectedSide": affectedSide,
         "motionDetected": True,
         "rom_aff": float(rom),
-        "ref_affShoulderElevMax": ref_peak,
+        "ref_unaffShoulderElevMax": ref_peak,
+        "ref_affShoulderElevMax": ref_aff_peak,
         "imi_affShoulderElevMax": imi_peak,
-        "imi_oppShoulderElevMax": opp_peak,
-        "imi_symmetryDiffDeg": abs(imi_peak - opp_peak),
+        "imi_unaffShoulderElevMax": imi_unaff_peak,
+        "reference_imitationDiffDeg": abs(imi_peak - ref_peak),
         "ref_trunkLeanMaxDeg": ref["trunkLean"]["max"],
         "imi_trunkLeanMaxDeg": imi["trunkLean"]["max"],
         "ref_shrugRatioMean": ref["shrugRatio"]["mean"],
@@ -578,7 +709,7 @@ def score_shoulder_abduction(
         "trunkDeltaDeg": trunk_delta,
         "shrugDelta": shrug_delta,
         "motionThresholdDeg": no_motion_threshold,
-        "note": "abduction_v1_uses_pose_heuristics",
+        "note": "abduction_v5_hard_gate",
     }
 
     quality_json = {
@@ -589,7 +720,7 @@ def score_shoulder_abduction(
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
         "framesUsed_imi": imi["framesUsed"],
-        "algo": "shoulder_abduction_v1",
+        "algo": "shoulder_abduction_v5",
     }
 
     return scores, features, quality_json
@@ -600,26 +731,68 @@ def score_hand_to_head(
     imi: Dict[str, Any],
     affectedSide: str,
 ) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
-    side = _side_name(affectedSide)
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
     quality = _quality_score(ref, imi)
 
-    ref_dist = ref[f"{side}WristToHead"]["min"]
-    imi_dist = imi[f"{side}WristToHead"]["min"]
+    ref_dist = ref[f"{unaff}WristToHead"]["min"]
+    ref_aff_dist = ref[f"{aff}WristToHead"]["min"]
+    imi_dist = imi[f"{aff}WristToHead"]["min"]
+    imi_unaff_dist = imi[f"{unaff}WristToHead"]["min"]
 
-    ref_elb = ref[f"{side}ElbowFlex"]["min"]
-    imi_elb = imi[f"{side}ElbowFlex"]["min"]
+    ref_elb = ref[f"{unaff}ElbowFlex"]["min"]
+    imi_elb = imi[f"{aff}ElbowFlex"]["min"]
 
+    ref_motion_threshold = 0.65
     no_motion_threshold = 0.65
+
+    if _wrong_side_by_smaller_is_better(
+        aff_value=ref_aff_dist,
+        unaff_value=ref_dist,
+        aff_max_threshold=ref_motion_threshold,
+        dominance_ratio=0.85,
+    ):
+        return _wrong_reference_side_response(
+            affectedSide=affectedSide,
+            algo="hand_to_head_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffWristToHeadMin": ref_dist,
+                "ref_affWristToHeadMin": ref_aff_dist,
+                "referenceDistanceThreshold": ref_motion_threshold,
+            },
+        )
+
+    if _wrong_side_by_smaller_is_better(
+        aff_value=imi_dist,
+        unaff_value=imi_unaff_dist,
+        aff_max_threshold=no_motion_threshold,
+        dominance_ratio=0.85,
+    ):
+        return _wrong_side_response(
+            affectedSide=affectedSide,
+            algo="hand_to_head_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffWristToHeadMin": ref_dist,
+                "imi_affWristToHeadMin": imi_dist,
+                "imi_unaffWristToHeadMin": imi_unaff_dist,
+                "distanceThreshold": no_motion_threshold,
+            },
+        )
+
     if imi_dist > no_motion_threshold:
         return _no_motion_response(
             affectedSide=affectedSide,
             reason="no_meaningful_hand_to_head_detected",
-            algo="hand_to_head_v1",
+            algo="hand_to_head_v5",
             ref=ref,
             imi=imi,
             features={
-                "ref_affWristToHeadMin": ref_dist,
+                "ref_unaffWristToHeadMin": ref_dist,
                 "imi_affWristToHeadMin": imi_dist,
+                "imi_unaffWristToHeadMin": imi_unaff_dist,
                 "distanceThreshold": no_motion_threshold,
             },
         )
@@ -628,24 +801,20 @@ def score_hand_to_head(
     elbow_score = _inverse_ratio_score(imi_elb, ref_elb)
     rom = 0.65 * close_score + 0.35 * elbow_score
 
-    opp = _opp_side_name(affectedSide)
-    imi_side = imi[f"{side}WristToHead"]["min"]
-    imi_opp = imi[f"{opp}WristToHead"]["min"]
-    symmetry = max(0.0, 100.0 - 40.0 * abs(imi_side - imi_opp))
-
+    symmetry = max(0.0, 100.0 - 60.0 * abs(imi_dist - ref_dist))
     comp, trunk_delta, shrug_delta = _compensation_score(ref, imi, trunk_weight=0.65, shrug_weight=0.35)
 
-    ref_series = ref["_series"][f"{side}WristToHeadInv"]
-    imi_series = imi["_series"][f"{side}WristToHeadInv"]
+    ref_series = ref["_series"][f"{unaff}WristToHeadInv"]
+    imi_series = imi["_series"][f"{aff}WristToHeadInv"]
     timing = _timing_score_from_series(ref_series, imi_series, quality)
     smoothness = _smoothness_score_from_series(imi_series, quality)
 
     overall = (
-        0.30 * rom +
-        0.30 * comp +
-        0.20 * symmetry +
-        0.10 * smoothness +
-        0.10 * timing
+        0.50 * rom +
+        0.15 * symmetry +
+        0.20 * comp +
+        0.05 * timing +
+        0.10 * smoothness
     )
 
     scores = {
@@ -660,10 +829,13 @@ def score_hand_to_head(
     features = {
         "affectedSide": affectedSide,
         "motionDetected": True,
-        "ref_affWristToHeadMin": ref_dist,
+        "ref_unaffWristToHeadMin": ref_dist,
+        "ref_affWristToHeadMin": ref_aff_dist,
         "imi_affWristToHeadMin": imi_dist,
-        "ref_affElbowFlexMinDeg": ref_elb,
+        "imi_unaffWristToHeadMin": imi_unaff_dist,
+        "ref_unaffElbowFlexMinDeg": ref_elb,
         "imi_affElbowFlexMinDeg": imi_elb,
+        "reference_imitationDiff": abs(imi_dist - ref_dist),
         "trunkDeltaDeg": trunk_delta,
         "shrugDelta": shrug_delta,
         "distanceThreshold": no_motion_threshold,
@@ -677,7 +849,7 @@ def score_hand_to_head(
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
         "framesUsed_imi": imi["framesUsed"],
-        "algo": "hand_to_head_v1",
+        "algo": "hand_to_head_v5",
     }
 
     return scores, features, quality_json
@@ -688,28 +860,63 @@ def score_hand_to_back(
     imi: Dict[str, Any],
     affectedSide: str,
 ) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
-    side = _side_name(affectedSide)
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
     quality = _quality_score(ref, imi)
 
-    ref_hip = ref[f"{side}WristToHip"]["min"]
-    imi_hip = imi[f"{side}WristToHip"]["min"]
+    ref_hip = ref[f"{unaff}WristToHip"]["min"]
+    ref_aff_hip = ref[f"{aff}WristToHip"]["min"]
+    imi_hip = imi[f"{aff}WristToHip"]["min"]
+    imi_unaff_hip = imi[f"{unaff}WristToHip"]["min"]
 
-    ref_back = ref[f"{side}BackReach"]["max"]
-    imi_back = imi[f"{side}BackReach"]["max"]
+    ref_back = ref[f"{unaff}BackReach"]["max"]
+    ref_aff_back = ref[f"{aff}BackReach"]["max"]
+    imi_back = imi[f"{aff}BackReach"]["max"]
+    imi_unaff_back = imi[f"{unaff}BackReach"]["max"]
 
-    # 가까워짐 + 뒤쪽 z 이동 둘 다 너무 약하면 무동작
-    if imi_hip > 0.55 and imi_back < 0.03:
-        return _no_motion_response(
+    if ref_hip > 0.55 and ref_aff_back > max(0.03, ref_back * 1.2):
+        return _wrong_reference_side_response(
             affectedSide=affectedSide,
-            reason="no_meaningful_hand_to_back_detected",
-            algo="hand_to_back_v1",
+            algo="hand_to_back_v5",
             ref=ref,
             imi=imi,
             features={
-                "ref_affWristToHipMin": ref_hip,
+                "ref_unaffWristToHipMin": ref_hip,
+                "ref_affWristToHipMin": ref_aff_hip,
+                "ref_unaffBackReachMax": ref_back,
+                "ref_affBackReachMax": ref_aff_back,
+            },
+        )
+
+    if imi_hip > 0.55 and imi_back < 0.03:
+        if imi_unaff_hip < imi_hip * 0.85 or imi_unaff_back > max(0.03, imi_back * 1.2):
+            return _wrong_side_response(
+                affectedSide=affectedSide,
+                algo="hand_to_back_v5",
+                ref=ref,
+                imi=imi,
+                features={
+                    "ref_unaffWristToHipMin": ref_hip,
+                    "imi_affWristToHipMin": imi_hip,
+                    "imi_unaffWristToHipMin": imi_unaff_hip,
+                    "ref_unaffBackReachMax": ref_back,
+                    "imi_affBackReachMax": imi_back,
+                    "imi_unaffBackReachMax": imi_unaff_back,
+                },
+            )
+
+        return _no_motion_response(
+            affectedSide=affectedSide,
+            reason="no_meaningful_hand_to_back_detected",
+            algo="hand_to_back_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffWristToHipMin": ref_hip,
                 "imi_affWristToHipMin": imi_hip,
-                "ref_affBackReachMax": ref_back,
+                "imi_unaffWristToHipMin": imi_unaff_hip,
+                "ref_unaffBackReachMax": ref_back,
                 "imi_affBackReachMax": imi_back,
+                "imi_unaffBackReachMax": imi_unaff_back,
                 "hipDistanceThreshold": 0.55,
                 "backReachThreshold": 0.03,
             },
@@ -719,24 +926,20 @@ def score_hand_to_back(
     back_score = _ratio_score(imi_back, ref_back)
     rom = 0.60 * hip_score + 0.40 * back_score
 
-    opp = _opp_side_name(affectedSide)
-    imi_side = imi[f"{side}WristToHip"]["min"]
-    imi_opp = imi[f"{opp}WristToHip"]["min"]
-    symmetry = max(0.0, 100.0 - 35.0 * abs(imi_side - imi_opp))
-
+    symmetry = max(0.0, 100.0 - 50.0 * abs(imi_hip - ref_hip))
     comp, trunk_delta, shrug_delta = _compensation_score(ref, imi, trunk_weight=0.70, shrug_weight=0.30)
 
-    ref_series = ref["_series"][f"{side}WristToHipInv"]
-    imi_series = imi["_series"][f"{side}WristToHipInv"]
+    ref_series = ref["_series"][f"{unaff}WristToHipInv"]
+    imi_series = imi["_series"][f"{aff}WristToHipInv"]
     timing = _timing_score_from_series(ref_series, imi_series, quality)
     smoothness = _smoothness_score_from_series(imi_series, quality)
 
     overall = (
-        0.35 * rom +
-        0.30 * comp +
-        0.20 * symmetry +
-        0.10 * smoothness +
-        0.05 * timing
+        0.50 * rom +
+        0.15 * symmetry +
+        0.20 * comp +
+        0.05 * timing +
+        0.10 * smoothness
     )
 
     scores = {
@@ -751,13 +954,17 @@ def score_hand_to_back(
     features = {
         "affectedSide": affectedSide,
         "motionDetected": True,
-        "ref_affWristToHipMin": ref_hip,
+        "ref_unaffWristToHipMin": ref_hip,
+        "ref_affWristToHipMin": ref_aff_hip,
         "imi_affWristToHipMin": imi_hip,
-        "ref_affBackReachMax": ref_back,
+        "imi_unaffWristToHipMin": imi_unaff_hip,
+        "ref_unaffBackReachMax": ref_back,
+        "ref_affBackReachMax": ref_aff_back,
         "imi_affBackReachMax": imi_back,
+        "imi_unaffBackReachMax": imi_unaff_back,
         "trunkDeltaDeg": trunk_delta,
         "shrugDelta": shrug_delta,
-        "note": "hand_to_back_is_pose_heuristic_and_should_be_validated",
+        "note": "hand_to_back_v5_reference_unaffected_vs_imitation_affected",
     }
 
     quality_json = {
@@ -768,7 +975,7 @@ def score_hand_to_back(
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
         "framesUsed_imi": imi["framesUsed"],
-        "algo": "hand_to_back_v1",
+        "algo": "hand_to_back_v5",
     }
 
     return scores, features, quality_json
@@ -779,26 +986,56 @@ def score_reach_forward(
     imi: Dict[str, Any],
     affectedSide: str,
 ) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
-    side = _side_name(affectedSide)
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
     quality = _quality_score(ref, imi)
 
-    ref_fwd = ref[f"{side}ReachForward"]["max"]
-    imi_fwd = imi[f"{side}ReachForward"]["max"]
+    ref_fwd = ref[f"{unaff}ReachForward"]["max"]
+    ref_aff_fwd = ref[f"{aff}ReachForward"]["max"]
+    imi_fwd = imi[f"{aff}ReachForward"]["max"]
+    imi_unaff_fwd = imi[f"{unaff}ReachForward"]["max"]
 
-    ref_len = ref[f"{side}ShoulderElev"]["max"]
-    imi_len = imi[f"{side}ShoulderElev"]["max"]
+    ref_len = ref[f"{unaff}ShoulderElev"]["max"]
+    imi_len = imi[f"{aff}ShoulderElev"]["max"]
+
+    if ref_aff_fwd > max(0.03, ref_fwd * 1.2):
+        return _wrong_reference_side_response(
+            affectedSide=affectedSide,
+            algo="reach_forward_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffReachForwardMax": ref_fwd,
+                "ref_affReachForwardMax": ref_aff_fwd,
+                "forwardReachThreshold": 0.03,
+            },
+        )
+
+    if imi_unaff_fwd > max(0.03, imi_fwd * 1.2):
+        return _wrong_side_response(
+            affectedSide=affectedSide,
+            algo="reach_forward_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffReachForwardMax": ref_fwd,
+                "imi_affReachForwardMax": imi_fwd,
+                "imi_unaffReachForwardMax": imi_unaff_fwd,
+                "forwardReachThreshold": 0.03,
+            },
+        )
 
     if imi_fwd < 0.03 and imi_len < 20.0:
         return _no_motion_response(
             affectedSide=affectedSide,
             reason="no_meaningful_forward_reach_detected",
-            algo="reach_forward_v1",
+            algo="reach_forward_v5",
             ref=ref,
             imi=imi,
             features={
-                "ref_affReachForwardMax": ref_fwd,
+                "ref_unaffReachForwardMax": ref_fwd,
                 "imi_affReachForwardMax": imi_fwd,
-                "ref_affShoulderElevMax": ref_len,
+                "imi_unaffReachForwardMax": imi_unaff_fwd,
+                "ref_unaffShoulderElevMax": ref_len,
                 "imi_affShoulderElevMax": imi_len,
                 "forwardReachThreshold": 0.03,
                 "shoulderAssistThresholdDeg": 20.0,
@@ -809,24 +1046,20 @@ def score_reach_forward(
     elev_score = _ratio_score(imi_len, ref_len)
     rom = 0.70 * fwd_score + 0.30 * elev_score
 
-    opp = _opp_side_name(affectedSide)
-    imi_side = imi[f"{side}ReachForward"]["max"]
-    imi_opp = imi[f"{opp}ReachForward"]["max"]
-    symmetry = max(0.0, 100.0 - 80.0 * abs(imi_side - imi_opp))
-
+    symmetry = max(0.0, 100.0 - 120.0 * abs(imi_fwd - ref_fwd))
     comp, trunk_delta, shrug_delta = _compensation_score(ref, imi, trunk_weight=0.75, shrug_weight=0.25)
 
-    ref_series = ref["_series"][f"{side}ReachForward"]
-    imi_series = imi["_series"][f"{side}ReachForward"]
+    ref_series = ref["_series"][f"{unaff}ReachForward"]
+    imi_series = imi["_series"][f"{aff}ReachForward"]
     timing = _timing_score_from_series(ref_series, imi_series, quality)
     smoothness = _smoothness_score_from_series(imi_series, quality)
 
     overall = (
-        0.35 * rom +
+        0.45 * rom +
+        0.15 * symmetry +
         0.25 * comp +
-        0.20 * symmetry +
-        0.10 * smoothness +
-        0.10 * timing
+        0.05 * timing +
+        0.10 * smoothness
     )
 
     scores = {
@@ -841,11 +1074,14 @@ def score_reach_forward(
     features = {
         "affectedSide": affectedSide,
         "motionDetected": True,
-        "ref_affReachForwardMax": ref_fwd,
+        "ref_unaffReachForwardMax": ref_fwd,
+        "ref_affReachForwardMax": ref_aff_fwd,
         "imi_affReachForwardMax": imi_fwd,
+        "imi_unaffReachForwardMax": imi_unaff_fwd,
+        "reference_imitationDiff": abs(imi_fwd - ref_fwd),
         "trunkDeltaDeg": trunk_delta,
         "shrugDelta": shrug_delta,
-        "note": "reach_forward_uses_blazepose_z_heuristic",
+        "note": "reach_forward_v5_reference_unaffected_vs_imitation_affected",
     }
 
     quality_json = {
@@ -856,7 +1092,7 @@ def score_reach_forward(
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
         "framesUsed_imi": imi["framesUsed"],
-        "algo": "reach_forward_v1",
+        "algo": "reach_forward_v5",
     }
 
     return scores, features, quality_json
@@ -867,27 +1103,60 @@ def score_reach_side(
     imi: Dict[str, Any],
     affectedSide: str,
 ) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
-    side = _side_name(affectedSide)
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
     quality = _quality_score(ref, imi)
 
-    ref_side = ref[f"{side}ReachSide"]["max"]
-    imi_side = imi[f"{side}ReachSide"]["max"]
+    ref_side = ref[f"{unaff}ReachSide"]["max"]
+    ref_aff_side = ref[f"{aff}ReachSide"]["max"]
+    imi_side = imi[f"{aff}ReachSide"]["max"]
+    imi_unaff_side = imi[f"{unaff}ReachSide"]["max"]
 
-    ref_up = ref[f"{side}ReachUp"]["max"]
-    imi_up = imi[f"{side}ReachUp"]["max"]
+    ref_up = ref[f"{unaff}ReachUp"]["max"]
+    imi_up = imi[f"{aff}ReachUp"]["max"]
 
     no_motion_threshold = 0.15
+
+    if ref_aff_side > max(no_motion_threshold, ref_side * 1.2):
+        return _wrong_reference_side_response(
+            affectedSide=affectedSide,
+            algo="reach_side_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffReachSideMax": ref_side,
+                "ref_affReachSideMax": ref_aff_side,
+                "motionThreshold": no_motion_threshold,
+            },
+        )
+
+    if imi_unaff_side > max(no_motion_threshold, imi_side * 1.2):
+        return _wrong_side_response(
+            affectedSide=affectedSide,
+            algo="reach_side_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffReachSideMax": ref_side,
+                "imi_affReachSideMax": imi_side,
+                "imi_unaffReachSideMax": imi_unaff_side,
+                "ref_unaffReachUpMax": ref_up,
+                "imi_affReachUpMax": imi_up,
+                "motionThreshold": no_motion_threshold,
+            },
+        )
+
     if imi_side < no_motion_threshold:
         return _no_motion_response(
             affectedSide=affectedSide,
             reason="no_meaningful_lateral_reach_detected",
-            algo="reach_side_v1",
+            algo="reach_side_v5",
             ref=ref,
             imi=imi,
             features={
-                "ref_affReachSideMax": ref_side,
+                "ref_unaffReachSideMax": ref_side,
                 "imi_affReachSideMax": imi_side,
-                "ref_affReachUpMax": ref_up,
+                "imi_unaffReachSideMax": imi_unaff_side,
+                "ref_unaffReachUpMax": ref_up,
                 "imi_affReachUpMax": imi_up,
                 "motionThreshold": no_motion_threshold,
             },
@@ -897,23 +1166,20 @@ def score_reach_side(
     up_score = _ratio_score(imi_up, ref_up)
     rom = 0.70 * side_score + 0.30 * up_score
 
-    opp = _opp_side_name(affectedSide)
-    opp_side_val = imi[f"{opp}ReachSide"]["max"]
-    symmetry = max(0.0, 100.0 - 60.0 * abs(imi_side - opp_side_val))
-
+    symmetry = max(0.0, 100.0 - 90.0 * abs(imi_side - ref_side))
     comp, trunk_delta, shrug_delta = _compensation_score(ref, imi, trunk_weight=0.60, shrug_weight=0.40)
 
-    ref_series = ref["_series"][f"{side}ReachSide"]
-    imi_series = imi["_series"][f"{side}ReachSide"]
+    ref_series = ref["_series"][f"{unaff}ReachSide"]
+    imi_series = imi["_series"][f"{aff}ReachSide"]
     timing = _timing_score_from_series(ref_series, imi_series, quality)
     smoothness = _smoothness_score_from_series(imi_series, quality)
 
     overall = (
-        0.35 * rom +
-        0.30 * comp +
-        0.20 * symmetry +
-        0.10 * smoothness +
-        0.05 * timing
+        0.45 * rom +
+        0.15 * symmetry +
+        0.25 * comp +
+        0.05 * timing +
+        0.10 * smoothness
     )
 
     scores = {
@@ -928,10 +1194,13 @@ def score_reach_side(
     features = {
         "affectedSide": affectedSide,
         "motionDetected": True,
-        "ref_affReachSideMax": ref_side,
+        "ref_unaffReachSideMax": ref_side,
+        "ref_affReachSideMax": ref_aff_side,
         "imi_affReachSideMax": imi_side,
-        "ref_affReachUpMax": ref_up,
+        "imi_unaffReachSideMax": imi_unaff_side,
+        "ref_unaffReachUpMax": ref_up,
         "imi_affReachUpMax": imi_up,
+        "reference_imitationDiff": abs(imi_side - ref_side),
         "motionThreshold": no_motion_threshold,
         "trunkDeltaDeg": trunk_delta,
         "shrugDelta": shrug_delta,
@@ -945,7 +1214,7 @@ def score_reach_side(
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
         "framesUsed_imi": imi["framesUsed"],
-        "algo": "reach_side_v1",
+        "algo": "reach_side_v5",
     }
 
     return scores, features, quality_json
@@ -956,46 +1225,83 @@ def score_elbow_flexion(
     imi: Dict[str, Any],
     affectedSide: str,
 ) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
-    side = _side_name(affectedSide)
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
     quality = _quality_score(ref, imi)
 
-    ref_min = ref[f"{side}ElbowFlex"]["min"]
-    imi_min = imi[f"{side}ElbowFlex"]["min"]
+    ref_min = ref[f"{unaff}ElbowFlex"]["min"]
+    ref_aff_min = ref[f"{aff}ElbowFlex"]["min"]
+    imi_min = imi[f"{aff}ElbowFlex"]["min"]
+    imi_unaff_min = imi[f"{unaff}ElbowFlex"]["min"]
 
-    no_motion_threshold = 150.0  # flexion 안 되면 팔꿈치 각도가 거의 펴진 상태
+    no_motion_threshold = 150.0
+
+    if _wrong_side_by_smaller_is_better(
+        aff_value=ref_aff_min,
+        unaff_value=ref_min,
+        aff_max_threshold=no_motion_threshold,
+        dominance_ratio=0.85,
+    ):
+        return _wrong_reference_side_response(
+            affectedSide=affectedSide,
+            algo="elbow_flexion_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffElbowFlexMinDeg": ref_min,
+                "ref_affElbowFlexMinDeg": ref_aff_min,
+                "motionThresholdDeg": no_motion_threshold,
+            },
+        )
+
+    if _wrong_side_by_smaller_is_better(
+        aff_value=imi_min,
+        unaff_value=imi_unaff_min,
+        aff_max_threshold=no_motion_threshold,
+        dominance_ratio=0.85,
+    ):
+        return _wrong_side_response(
+            affectedSide=affectedSide,
+            algo="elbow_flexion_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffElbowFlexMinDeg": ref_min,
+                "imi_affElbowFlexMinDeg": imi_min,
+                "imi_unaffElbowFlexMinDeg": imi_unaff_min,
+                "motionThresholdDeg": no_motion_threshold,
+            },
+        )
+
     if imi_min > no_motion_threshold:
         return _no_motion_response(
             affectedSide=affectedSide,
             reason="no_meaningful_elbow_flexion_detected",
-            algo="elbow_flexion_v1",
+            algo="elbow_flexion_v5",
             ref=ref,
             imi=imi,
             features={
-                "ref_affElbowFlexMinDeg": ref_min,
+                "ref_unaffElbowFlexMinDeg": ref_min,
                 "imi_affElbowFlexMinDeg": imi_min,
+                "imi_unaffElbowFlexMinDeg": imi_unaff_min,
                 "motionThresholdDeg": no_motion_threshold,
             },
         )
 
     rom = _inverse_ratio_score(imi_min, ref_min)
-
-    opp = _opp_side_name(affectedSide)
-    opp_min = imi[f"{opp}ElbowFlex"]["min"]
-    symmetry = max(0.0, 100.0 - 1.2 * abs(imi_min - opp_min))
-
+    symmetry = max(0.0, 100.0 - 1.2 * abs(imi_min - ref_min))
     comp, trunk_delta, shrug_delta = _compensation_score(ref, imi, trunk_weight=0.75, shrug_weight=0.25)
 
-    ref_series = [max(0.0, 180.0 - x) for x in ref["_series"][f"{side}ElbowFlex"]]
-    imi_series = [max(0.0, 180.0 - x) for x in imi["_series"][f"{side}ElbowFlex"]]
+    ref_series = [max(0.0, 180.0 - x) for x in ref["_series"][f"{unaff}ElbowFlex"]]
+    imi_series = [max(0.0, 180.0 - x) for x in imi["_series"][f"{aff}ElbowFlex"]]
     timing = _timing_score_from_series(ref_series, imi_series, quality)
     smoothness = _smoothness_score_from_series(imi_series, quality)
 
     overall = (
-        0.45 * rom +
+        0.50 * rom +
+        0.15 * symmetry +
         0.20 * comp +
-        0.20 * symmetry +
-        0.10 * smoothness +
-        0.05 * timing
+        0.05 * timing +
+        0.10 * smoothness
     )
 
     scores = {
@@ -1010,8 +1316,11 @@ def score_elbow_flexion(
     features = {
         "affectedSide": affectedSide,
         "motionDetected": True,
-        "ref_affElbowFlexMinDeg": ref_min,
+        "ref_unaffElbowFlexMinDeg": ref_min,
+        "ref_affElbowFlexMinDeg": ref_aff_min,
         "imi_affElbowFlexMinDeg": imi_min,
+        "imi_unaffElbowFlexMinDeg": imi_unaff_min,
+        "reference_imitationDiffDeg": abs(imi_min - ref_min),
         "trunkDeltaDeg": trunk_delta,
         "shrugDelta": shrug_delta,
         "motionThresholdDeg": no_motion_threshold,
@@ -1025,7 +1334,7 @@ def score_elbow_flexion(
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
         "framesUsed_imi": imi["framesUsed"],
-        "algo": "elbow_flexion_v1",
+        "algo": "elbow_flexion_v5",
     }
 
     return scores, features, quality_json
@@ -1036,46 +1345,73 @@ def score_elbow_extension(
     imi: Dict[str, Any],
     affectedSide: str,
 ) -> Tuple[Dict[str, int], Dict[str, Any], Dict[str, Any]]:
-    side = _side_name(affectedSide)
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
     quality = _quality_score(ref, imi)
 
-    ref_max = ref[f"{side}ElbowFlex"]["max"]
-    imi_max = imi[f"{side}ElbowFlex"]["max"]
+    ref_max = ref[f"{unaff}ElbowFlex"]["max"]
+    ref_aff_max = ref[f"{aff}ElbowFlex"]["max"]
+    imi_max = imi[f"{aff}ElbowFlex"]["max"]
+    imi_unaff_max = imi[f"{unaff}ElbowFlex"]["max"]
 
     no_motion_threshold = 140.0
+
+    if ref_aff_max > max(no_motion_threshold, ref_max * 1.1):
+        return _wrong_reference_side_response(
+            affectedSide=affectedSide,
+            algo="elbow_extension_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffElbowExtMaxDeg": ref_max,
+                "ref_affElbowExtMaxDeg": ref_aff_max,
+                "motionThresholdDeg": no_motion_threshold,
+            },
+        )
+
+    if imi_unaff_max > max(no_motion_threshold, imi_max * 1.1):
+        return _wrong_side_response(
+            affectedSide=affectedSide,
+            algo="elbow_extension_v5",
+            ref=ref,
+            imi=imi,
+            features={
+                "ref_unaffElbowExtMaxDeg": ref_max,
+                "imi_affElbowExtMaxDeg": imi_max,
+                "imi_unaffElbowExtMaxDeg": imi_unaff_max,
+                "motionThresholdDeg": no_motion_threshold,
+            },
+        )
+
     if imi_max < no_motion_threshold:
         return _no_motion_response(
             affectedSide=affectedSide,
             reason="no_meaningful_elbow_extension_detected",
-            algo="elbow_extension_v1",
+            algo="elbow_extension_v5",
             ref=ref,
             imi=imi,
             features={
-                "ref_affElbowExtMaxDeg": ref_max,
+                "ref_unaffElbowExtMaxDeg": ref_max,
                 "imi_affElbowExtMaxDeg": imi_max,
+                "imi_unaffElbowExtMaxDeg": imi_unaff_max,
                 "motionThresholdDeg": no_motion_threshold,
             },
         )
 
     rom = _ratio_score(imi_max, ref_max)
-
-    opp = _opp_side_name(affectedSide)
-    opp_max = imi[f"{opp}ElbowFlex"]["max"]
-    symmetry = max(0.0, 100.0 - 1.0 * abs(imi_max - opp_max))
-
+    symmetry = max(0.0, 100.0 - 1.0 * abs(imi_max - ref_max))
     comp, trunk_delta, shrug_delta = _compensation_score(ref, imi, trunk_weight=0.75, shrug_weight=0.25)
 
-    ref_series = ref["_series"][f"{side}ElbowFlex"]
-    imi_series = imi["_series"][f"{side}ElbowFlex"]
+    ref_series = ref["_series"][f"{unaff}ElbowFlex"]
+    imi_series = imi["_series"][f"{aff}ElbowFlex"]
     timing = _timing_score_from_series(ref_series, imi_series, quality)
     smoothness = _smoothness_score_from_series(imi_series, quality)
 
     overall = (
-        0.45 * rom +
+        0.50 * rom +
+        0.15 * symmetry +
         0.20 * comp +
-        0.20 * symmetry +
-        0.10 * smoothness +
-        0.05 * timing
+        0.05 * timing +
+        0.10 * smoothness
     )
 
     scores = {
@@ -1090,8 +1426,11 @@ def score_elbow_extension(
     features = {
         "affectedSide": affectedSide,
         "motionDetected": True,
-        "ref_affElbowExtMaxDeg": ref_max,
+        "ref_unaffElbowExtMaxDeg": ref_max,
+        "ref_affElbowExtMaxDeg": ref_aff_max,
         "imi_affElbowExtMaxDeg": imi_max,
+        "imi_unaffElbowExtMaxDeg": imi_unaff_max,
+        "reference_imitationDiffDeg": abs(imi_max - ref_max),
         "trunkDeltaDeg": trunk_delta,
         "shrugDelta": shrug_delta,
         "motionThresholdDeg": no_motion_threshold,
@@ -1105,7 +1444,7 @@ def score_elbow_extension(
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
         "framesUsed_imi": imi["framesUsed"],
-        "algo": "elbow_extension_v1",
+        "algo": "elbow_extension_v5",
     }
 
     return scores, features, quality_json
@@ -1161,6 +1500,15 @@ async def analyze(
 
         ref_feat = extract_pose_features(ref_path, stride=6, max_frames=600)
         imi_feat = extract_pose_features(imi_path, stride=6, max_frames=600)
+
+        print("=== analyze start ===")
+        print("exerciseId =", exerciseId)
+        print("affectedSide =", affectedSide)
+        print("ref leftShoulderElev max =", ref_feat["leftShoulderElev"]["max"])
+        print("ref rightShoulderElev max =", ref_feat["rightShoulderElev"]["max"])
+        print("imi leftShoulderElev max =", imi_feat["leftShoulderElev"]["max"])
+        print("imi rightShoulderElev max =", imi_feat["rightShoulderElev"]["max"])
+        print("=====================")
 
         if exerciseId == 0:
             scores, features, quality = score_shoulder_flexion(ref_feat, imi_feat, affectedSide)

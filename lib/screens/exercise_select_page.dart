@@ -30,10 +30,16 @@ class ExerciseSelectPage extends StatelessWidget {
                trailing: const Icon(Icons.chevron_right),
                onTap: () {
                  final sessionUuid = DateTime.now().microsecondsSinceEpoch.toString();
+
+                 final extra = GoRouterState.of(context).extra;
+                 final data = (extra is Map) ? extra : null;
+                 final affectedSide = (data?['affectedSide'] as String?) ?? 'L';
+
                  context.push('/record', extra: {
                    'patientId': patientId,
                    'exerciseId': it.id,
                    'sessionUuid': sessionUuid,
+                   'affectedSide': affectedSide,
                  });
                },
           );

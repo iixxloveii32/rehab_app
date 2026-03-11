@@ -1,14 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
-
-import 'package:flutter/foundation.dart';
+import 'package:isar/isar.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
-import 'package:isar/isar.dart';
 
-import '../models/session_log.dart';
 import '../storage/isar_db.dart';
+import '../models/session_log.dart';
 
 String _serverBaseUrl() {
   return 'http://192.168.10.107:5000';
@@ -35,58 +33,13 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   int _compensation = 0;
   int _rom = 0;
 
-  String _affectedSide = 'L';
+  late String _affectedSide;
+
   String? _sessionUuid;
   int _attemptIndex = 0;
 
-  Map<String, dynamic> _lastFeatures = {};
-  Map<String, dynamic> _lastQuality = {};
-
-  String _exerciseTitle() {
-    switch (_exerciseId) {
-      case 0:
-        return '팔 앞으로 들기';
-      case 1:
-        return '팔 옆으로 들기';
-      case 2:
-        return '머리 만지기';
-      case 3:
-        return '허리 뒤로 손 가져가기';
-      case 4:
-        return '앞 물건 잡기';
-      case 5:
-        return '옆 물건 잡기';
-      case 6:
-        return '팔 굽히기';
-      case 7:
-        return '팔 펴기';
-      default:
-        return '운동';
-    }
-  }
-
-  String _romLabel() {
-    switch (_exerciseId) {
-      case 0:
-        return '팔 올리기';
-      case 1:
-        return '옆으로 올리기';
-      case 2:
-        return '머리까지 닿기';
-      case 3:
-        return '허리 뒤로 가기';
-      case 4:
-        return '앞으로 뻗기';
-      case 5:
-        return '옆으로 뻗기';
-      case 6:
-        return '팔 굽히기';
-      case 7:
-        return '팔 펴기';
-      default:
-        return '팔 움직임';
-    }
-  }
+  Map<String, dynamic> _quality = <String, dynamic>{};
+  Map<String, dynamic> _features = <String, dynamic>{};
 
   @override
   void initState() {
@@ -94,169 +47,76 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _saveScore());
   }
 
-  List<String> buildCoachingLines(Map<String, dynamic> features) {
-    final side = (features['affectedSide'] as String?) ?? _affectedSide;
-    final sideKr = (side == 'R') ? '오른쪽 팔' : '왼쪽 팔';
+  String _dateKey(DateTime dt) {
+    final y = dt.year.toString().padLeft(4, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
 
-    final romAff = (features['rom_aff'] is num)
-        ? (features['rom_aff'] as num).toDouble()
-        : null;
-    final trunkDelta = (features['trunkDeltaDeg'] is num)
-        ? (features['trunkDeltaDeg'] as num).toDouble()
-        : 0.0;
-    final shrugDelta = (features['shrugDelta'] is num)
-        ? (features['shrugDelta'] as num).toDouble()
-        : 0.0;
-    final symDiff = (features['imi_symmetryDiffDeg'] is num)
-        ? (features['imi_symmetryDiffDeg'] as num).toDouble()
-        : 0.0;
+  String _retakeMessage() {
+    final reason = _quality['reason']?.toString();
 
-    final lines = <String>[];
-
-    switch (_exerciseId) {
-      case 0: // 팔 앞으로 들기
-        if (romAff != null) {
-          if (romAff < 40) {
-            lines.add('$sideKr을 몸 앞쪽으로 조금 더 높게 들어 보세요.');
-          } else if (romAff < 70) {
-            lines.add('$sideKr을 앞쪽으로 조금 더 끝까지 올려 보세요.');
-          } else {
-            lines.add('$sideKr을 앞쪽으로 잘 들어 올렸어요.');
-          }
-        }
-        break;
-
-      case 1: // 팔 옆으로 들기
-        if (romAff != null) {
-          if (romAff < 40) {
-            lines.add('$sideKr을 몸 옆으로 조금 더 벌려 보세요.');
-          } else if (romAff < 70) {
-            lines.add('$sideKr을 옆으로 조금 더 높게 올려 보세요.');
-          } else {
-            lines.add('$sideKr을 옆으로 잘 들어 올렸어요.');
-          }
-        }
-        break;
-
-      case 2: // 머리 만지기
-        if (romAff != null) {
-          if (romAff < 40) {
-            lines.add('$sideKr 손이 머리 쪽으로 조금 더 가까이 가면 좋아요.');
-          } else if (romAff < 70) {
-            lines.add('$sideKr 손을 머리 쪽으로 조금 더 올려 보세요.');
-          } else {
-            lines.add('$sideKr 손이 머리 쪽으로 잘 올라갔어요.');
-          }
-        }
-        break;
-
-      case 3: // 허리 뒤로 손 가져가기
-        if (romAff != null) {
-          if (romAff < 40) {
-            lines.add('$sideKr 손을 허리 뒤쪽으로 조금 더 보내 보세요.');
-          } else if (romAff < 70) {
-            lines.add('$sideKr 손이 허리 뒤로 조금 더 가면 좋아요.');
-          } else {
-            lines.add('$sideKr 손이 허리 뒤로 잘 이동했어요.');
-          }
-        }
-        break;
-
-      case 4: // 앞 물건 잡기
-        if (romAff != null) {
-          if (romAff < 40) {
-            lines.add('$sideKr을 앞쪽으로 조금 더 뻗어 보세요.');
-          } else if (romAff < 70) {
-            lines.add('$sideKr을 앞 목표까지 조금 더 뻗어 보세요.');
-          } else {
-            lines.add('$sideKr을 앞쪽으로 잘 뻗었어요.');
-          }
-        }
-        break;
-
-      case 5: // 옆 물건 잡기
-        if (romAff != null) {
-          if (romAff < 40) {
-            lines.add('$sideKr을 옆쪽으로 조금 더 뻗어 보세요.');
-          } else if (romAff < 70) {
-            lines.add('$sideKr을 옆 목표까지 조금 더 뻗어 보세요.');
-          } else {
-            lines.add('$sideKr을 옆쪽으로 잘 뻗었어요.');
-          }
-        }
-        break;
-
-      case 6: // 팔 굽히기
-        if (romAff != null) {
-          if (romAff < 40) {
-            lines.add('$sideKr을 조금 더 굽혀 보세요.');
-          } else if (romAff < 70) {
-            lines.add('$sideKr을 몸 쪽으로 조금 더 당겨 보세요.');
-          } else {
-            lines.add('$sideKr 굽히기가 잘 되었어요.');
-          }
-        }
-        break;
-
-      case 7: // 팔 펴기
-        if (romAff != null) {
-          if (romAff < 40) {
-            lines.add('$sideKr을 조금 더 곧게 펴 보세요.');
-          } else if (romAff < 70) {
-            lines.add('$sideKr을 끝까지 조금 더 펴 보세요.');
-          } else {
-            lines.add('$sideKr 펴기가 잘 되었어요.');
-          }
-        }
-        break;
-
+    switch (reason) {
+      case 'wrong_reference_side_performed':
+        return '기준 촬영에서 반대쪽 팔이 더 많이 움직였어요.\n건강한 쪽 팔로 다시 촬영해 주세요.';
+      case 'wrong_side_performed':
+        return '따라하기에서 반대쪽 팔이 더 많이 움직였어요.\n환측 팔로 다시 해 주세요.';
+      case 'low_visibility_or_too_few_frames':
+        return '몸과 팔이 화면 안에 잘 보이게 다시 촬영해 주세요.\n조금 더 멀리 서면 더 잘 인식돼요.';
       default:
-        if (romAff != null) {
-          if (romAff < 60) {
-            lines.add('$sideKr 움직임을 조금 더 크게 해보세요.');
-          } else {
-            lines.add('$sideKr 움직임이 좋아요.');
-          }
+        if (reason != null && reason.startsWith('no_meaningful_')) {
+          return '움직임이 작게 인식되었어요.\n팔을 조금 더 크게 움직여 다시 해 보세요.';
         }
+        return '움직임이 작거나 화면 인식이 어려웠어요.\n다시 한 번 천천히 촬영해 보세요.';
     }
-
-    if (trunkDelta >= 8) {
-      lines.add('상체가 함께 많이 움직였어요. 몸통을 조금 더 고정해 보세요.');
-    }
-
-    if (shrugDelta >= 0.08) {
-      lines.add('어깨에 힘이 많이 들어갔어요. 어깨를 내리고 편하게 해보세요.');
-    }
-
-    if (symDiff >= 12) {
-      lines.add('좌우 차이가 조금 커요. 가능한 비슷한 높이와 범위로 맞춰보세요.');
-    }
-
-    if (lines.isEmpty) {
-      lines.add('좋아요. 지금처럼 천천히 한 번 더 해보세요.');
-    }
-
-    return lines.take(3).toList();
   }
 
-  String _scoreLabel(int score) {
-    if (score >= 80) return '좋아요';
-    if (score >= 60) return '잘하고 있어요';
-    if (score >= 40) return '조금 더 연습해봐요';
-    return '천천히 다시 해봐요';
+  String _scoreTitle() {
+    if (_overall >= 85) return '아주 좋아요';
+    if (_overall >= 70) return '잘했어요';
+    if (_overall >= 50) return '조금 더 연습해볼게요';
+    return '다시 해보면 더 좋아질 수 있어요';
   }
 
-  Color _scoreColor(BuildContext context, int score) {
-    if (score >= 80) return Colors.green;
-    if (score >= 60) return Colors.blue;
-    if (score >= 40) return Colors.orange;
-    return Colors.redAccent;
+  String _scoreComment() {
+    if ((_quality['needsRetake'] == true)) {
+      return _retakeMessage();
+    }
+    if (_overall >= 85) {
+      return '동작이 안정적으로 잘 수행되었어요.';
+    }
+    if (_overall >= 70) {
+      return '전반적으로 잘 수행했어요. 조금만 더 다듬으면 더 좋아요.';
+    }
+    if (_overall >= 50) {
+      return '목표 동작은 보였지만 범위나 안정성이 더 필요해요.';
+    }
+    return '조금 더 크게, 천천히 다시 해보면 더 정확하게 평가할 수 있어요.';
+  }
+
+  String _labelForScore(String key) {
+    switch (key) {
+      case 'rom':
+        return '팔 올리기';
+      case 'compensation':
+        return '몸통 안정성';
+      case 'symmetry':
+        return '좌우 균형';
+      case 'smoothness':
+        return '움직임 부드러움';
+      case 'timing':
+        return '속도 맞추기';
+      default:
+        return key;
+    }
   }
 
   Future<void> _saveScore() async {
     try {
       final extra = GoRouterState.of(context).extra;
       final data = (extra is Map) ? extra : null;
+
       final affectedSide = data?['affectedSide'] as String? ?? 'L';
       _affectedSide = affectedSide;
 
@@ -275,20 +135,18 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       final now = DateTime.now();
       final todayKey = _dateKey(now);
-
-      final sessionUuid =
-          incomingSessionUuid ?? DateTime.now().microsecondsSinceEpoch.toString();
+      final sessionUuid = incomingSessionUuid ?? DateTime.now().microsecondsSinceEpoch.toString();
       _sessionUuid = sessionUuid;
 
       final isar = IsarDB.instance;
 
-      final existingImitLogs = await isar.sessionLogs
-          .filter()
-          .patientIdEqualTo(patientId)
-          .exerciseIdEqualTo(exerciseId)
-          .dateKeyEqualTo(todayKey)
-          .isReferenceEqualTo(false)
-          .findAll();
+      final allLogs = await isar.sessionLogs.where().findAll();
+
+      final existingImitLogs = allLogs.where((log) =>
+      log.patientId == patientId &&
+          log.exerciseId == exerciseId &&
+          log.dateKey == todayKey &&
+          log.isReference == false).toList();
 
       final attemptIndex = existingImitLogs.length + 1;
       _attemptIndex = attemptIndex;
@@ -304,14 +162,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _compensation = result.compensation;
       _rom = result.rom;
       _overall = result.overall;
-      _lastFeatures = result.features;
-      _lastQuality = result.quality;
+      _quality = result.quality;
+      _features = result.features;
 
-      final existingRefs = await isar.sessionLogs
-          .filter()
-          .sessionUuidEqualTo(sessionUuid)
-          .isReferenceEqualTo(true)
-          .findAll();
+      final existingRefs = allLogs.where((log) =>
+      log.sessionUuid == sessionUuid &&
+          log.isReference == true).toList();
 
       final refExists = existingRefs.isNotEmpty;
 
@@ -362,10 +218,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       if (!mounted) return;
       setState(() => _saving = false);
-    } catch (e, st) {
-      debugPrint('FeedbackScreen _saveScore error: $e');
-      debugPrintStack(stackTrace: st);
-
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _saving = false;
@@ -378,13 +231,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     required String referenceVideoPath,
     required String imitationVideoPath,
   }) async {
-    final baseUrl = _serverBaseUrl();
-    final uri = Uri.parse('$baseUrl/analyze');
-
-    debugPrint('SERVER baseUrl = $baseUrl');
-    debugPrint('SERVER uri = $uri');
-    debugPrint('reference path = $referenceVideoPath');
-    debugPrint('imitation path = $imitationVideoPath');
+    final uri = Uri.parse('${_serverBaseUrl()}/analyze');
 
     final req = http.MultipartRequest('POST', uri)
       ..files.add(await http.MultipartFile.fromPath('reference', referenceVideoPath))
@@ -392,27 +239,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       ..fields['exerciseId'] = _exerciseId.toString()
       ..fields['affectedSide'] = _affectedSide;
 
-    debugPrint('sending request to server...');
-
-    final streamed = await req.send().timeout(const Duration(seconds: 15));
+    final streamed = await req.send().timeout(const Duration(seconds: 60));
     final resp = await http.Response.fromStream(streamed);
 
-    debugPrint('server status = ${resp.statusCode}');
-    debugPrint('server body = ${resp.body}');
-
-    if (resp.statusCode == 501) {
-      throw Exception('해당 동작 분석 알고리즘이 아직 준비되지 않았습니다.');
-    }
     if (resp.statusCode != 200) {
       throw Exception('분석 서버 오류 ${resp.statusCode}: ${resp.body}');
     }
 
     final j = jsonDecode(resp.body) as Map<String, dynamic>;
 
-    final features =
-        (j['features'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
-    final quality =
-        (j['quality'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final features = (j['features'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final quality = (j['quality'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
 
     int asInt(dynamic v) => (v is num) ? v.round() : int.parse(v.toString());
 
@@ -428,235 +265,149 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     );
   }
 
-  String _dateKey(DateTime dt) {
-    final y = dt.year.toString().padLeft(4, '0');
-    final m = dt.month.toString().padLeft(2, '0');
-    final d = dt.day.toString().padLeft(2, '0');
-    return '$y-$m-$d';
+  Widget _scoreChip(String label, int value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
+          ),
+          Text(
+            '$value점',
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final showBottomButton = !_saving && _error == null;
-    final coachingLines = buildCoachingLines(_lastFeatures);
-    final needRetake = _lastQuality['needsRetake'] == true;
+    final needsRetake = _quality['needsRetake'] == true;
 
     return Scaffold(
-      appBar: AppBar(title: Text('${_exerciseTitle()} 결과')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
+      appBar: AppBar(title: const Text('피드백')),
+      body: SafeArea(
         child: _saving
             ? const Center(child: CircularProgressIndicator())
             : (_error != null)
             ? Center(
-          child: Text(
-            '결과를 불러오지 못했습니다.\n$_error',
-            textAlign: TextAlign.center,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text('저장 실패: $_error'),
           ),
         )
-            : ListView(
-          children: [
-            _OverallScoreCard(
-              score: _overall,
-              label: _scoreLabel(_overall),
-              color: _scoreColor(context, _overall),
-            ),
-            const SizedBox(height: 8),
-            Center(
-              child: Text(
-                _exerciseTitle(),
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _MiniScoreCard(
-                    title: _romLabel(),
-                    score: _rom,
-                    icon: Icons.swipe_up_alt,
-                  ),
+            : Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(16),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _MiniScoreCard(
-                    title: '좌우 균형',
-                    score: _symmetry,
-                    icon: Icons.balance,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _MiniScoreCard(
-              title: '몸통 안정성',
-              score: _compensation,
-              icon: Icons.accessibility_new,
-            ),
-            const SizedBox(height: 16),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '오늘의 안내',
-                      style: Theme.of(context).textTheme.titleMedium,
+                      _scoreTitle(),
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 10),
-                    ...coachingLines.map(
-                          (line) => Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('• '),
-                            Expanded(child: Text(line)),
-                          ],
+                    Row(
+                      children: [
+                        const Text(
+                          '총점',
+                          style: TextStyle(fontSize: 16),
                         ),
-                      ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '$_overall점',
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      _scoreComment(),
+                      style: const TextStyle(fontSize: 15, height: 1.4),
                     ),
                   ],
                 ),
               ),
-            ),
-            if (needRetake) ...[
-              const SizedBox(height: 12),
-              Card(
-                color: Colors.orange.shade50,
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.warning_amber_rounded),
-                      const SizedBox(width: 10),
-                      Expanded(
+              const SizedBox(height: 16),
+              Text(
+                '세부 결과',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: ListView(
+                  children: [
+                    _scoreChip(_labelForScore('rom'), _rom),
+                    const SizedBox(height: 10),
+                    _scoreChip(_labelForScore('compensation'), _compensation),
+                    const SizedBox(height: 10),
+                    _scoreChip(_labelForScore('symmetry'), _symmetry),
+                    const SizedBox(height: 10),
+                    _scoreChip(_labelForScore('smoothness'), _smoothness),
+                    const SizedBox(height: 10),
+                    _scoreChip(_labelForScore('timing'), _timing),
+                    if (needsRetake) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.orange.shade200),
+                        ),
                         child: Text(
-                          '움직임이 작거나 화면 인식이 어려웠어요. 다시 한 번 천천히 촬영해 보세요.',
-                          style: TextStyle(
-                            color: Colors.orange.shade900,
+                          _retakeMessage(),
+                          style: const TextStyle(
+                            fontSize: 15,
+                            height: 1.4,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ),
                     ],
-                  ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: () {
+                    context.push('/results', extra: {
+                      'patientId': _patientId,
+                    });
+                  },
+                  child: const Text('결과 보기'),
                 ),
               ),
             ],
-          ],
-        ),
-      ),
-      bottomNavigationBar: showBottomButton
-          ? SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton(
-              onPressed: () {
-                context.push('/results', extra: {
-                  'patientId': _patientId,
-                });
-              },
-              child: const Text('결과 보기'),
-            ),
           ),
-        ),
-      )
-          : null,
-    );
-  }
-}
-
-class _OverallScoreCard extends StatelessWidget {
-  final int score;
-  final String label;
-  final Color color;
-
-  const _OverallScoreCard({
-    required this.score,
-    required this.label,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-        child: Column(
-          children: [
-            Text(
-              '전체 점수',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '$score점',
-              style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MiniScoreCard extends StatelessWidget {
-  final String title;
-  final int score;
-  final IconData icon;
-
-  const _MiniScoreCard({
-    required this.title,
-    required this.score,
-    required this.icon,
-  });
-
-  String _comment(int score) {
-    if (score >= 80) return '좋아요';
-    if (score >= 60) return '보통';
-    return '연습 필요';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 1,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
-        child: Column(
-          children: [
-            Icon(icon, size: 28),
-            const SizedBox(height: 8),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleSmall,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '$score점',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(_comment(score)),
-          ],
         ),
       ),
     );
