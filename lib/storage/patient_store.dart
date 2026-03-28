@@ -27,7 +27,13 @@ class PatientStore {
 
     return await isar.patients.get(lastId);
   }
+  static Future<List<Patient>> getAllPatients() async {
+    final isar = IsarDB.instance;
 
+    final patients = await isar.patients.where().findAll();
+    patients.sort((a, b) => b.id.compareTo(a.id));
+    return patients;
+  }
   static Future<void> clear() async {
     final isar = IsarDB.instance;
     await isar.writeTxn(() async {

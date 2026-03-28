@@ -5,19 +5,28 @@ import 'storage/patient_store.dart';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:video_player/video_player.dart';
-import 'package:flutter/foundation.dart';
 import 'screens/feedback_screen.dart';
 import 'screens/results_page.dart';
 import 'screens/exercise_select_page.dart';
-import 'utils/side_instruction.dart';
-import 'exercises/exercise_definitions.dart';
+import 'screens/screening_screen.dart';
+import 'screens/screening_screen.dart';
+import 'screens/screening_result_page.dart';
+import 'screens/screening_camera_screen.dart';
+import 'screens/screening_analyze_screen.dart';
+import 'screens/screening_result_page.dart';
+import 'screens/start_menu_screen.dart';
+import 'screens/patient_list_screen.dart';
 
 final GoRouter appRouter = GoRouter(
   initialLocation: '/',
   routes: [
     GoRoute(
-      path: '/',
+      path: '/patient-form',
       builder: (context, state) => const PatientFormScreen(),
+    ),
+    GoRoute(
+      path: '/patient-list',
+      builder: (context, state) => const PatientListScreen(),
     ),
     GoRoute(
       path: '/record',
@@ -42,6 +51,26 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/exercise',
       builder: (context, state) => const ExerciseSelectPage(),
+    ),
+    GoRoute(
+      path: '/screening-result',
+      builder: (context, state) => const ScreeningResultPage(),
+    ),
+    GoRoute(
+      path: '/screening-camera',
+      builder: (context, state) => const ScreeningCameraScreen(),
+    ),
+    GoRoute(
+      path: '/screening-analyze',
+      builder: (context, state) => const ScreeningAnalyzeScreen(),
+    ),
+    GoRoute(
+      path: '/screening-result',
+      builder: (context, state) => const ScreeningResultPage(),
+    ),
+    GoRoute(
+      path: '/screening',
+      builder: (context, state) => const ScreeningScreen(),
     ),
 
   ],
@@ -703,32 +732,32 @@ class _ImitationScreenState extends State<ImitationScreen> {
     final modelPath = data?['videoPath'] as String?;
     final patientId = data?['patientId'] as int?;
     final affectedSide = data?['affectedSide'] as String?;
+    final exerciseId = data?['exerciseId'] as int?;
+    final sessionUuid = data?['sessionUuid'] as String?;
 
     final patientPath = _patientVideo?.path;
 
     if (modelPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('모델(관찰) 영상 경로가 없습니다.')),
-      );
-      return;
-    }
-    if (patientPath == null || patientPath.isEmpty || !File(patientPath).existsSync()) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('환자 녹화를 먼저 완료해 주세요.')),
+        const SnackBar(content: Text('모델 영상 없음')),
       );
       return;
     }
 
-    final exerciseId = data?['exerciseId'] as int?;
-    final sessionUuid = data?['sessionUuid'] as String?;
+    if (patientPath == null || !File(patientPath).existsSync()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('환자 녹화 필요')),
+      );
+      return;
+    }
 
     context.push('/feedback', extra: {
-      'modelPath': modelPath,
-      'patientPath': patientPath,
       'patientId': patientId,
       'exerciseId': exerciseId,
       'sessionUuid': sessionUuid,
       'affectedSide': affectedSide,
+      'modelPath': modelPath,
+      'patientPath': patientPath,
     });
   }
 

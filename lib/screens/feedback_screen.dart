@@ -1,12 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:isar/isar.dart';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
+import 'package:isar/isar.dart';
 
-import '../storage/isar_db.dart';
 import '../models/session_log.dart';
+import '../storage/isar_db.dart';
 
 String _serverBaseUrl() {
   return 'http://192.168.10.107:5000';
@@ -26,6 +28,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   int? _patientId;
   int _exerciseId = 0;
 
+  List<int> _routineExerciseIds = [];
+  int _routineIndex = 0;
+  bool _fromRoutine = false;
+
   int _overall = 0;
   int _symmetry = 0;
   int _timing = 0;
@@ -41,10 +47,25 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Map<String, dynamic> _quality = <String, dynamic>{};
   Map<String, dynamic> _features = <String, dynamic>{};
 
+  Timer? _autoTimer;
+  int _secondsLeft = 5;
+
+  bool _isScreening = false;
+  int _screeningIndex = 0;
+  int _screeningTotal = 0;
+
+  final List<int> _screeningExerciseIds = const [0, 1, 2, 3, 4, 5, 6, 7];
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _saveScore());
+  }
+
+  @override
+  void dispose() {
+    _autoTimer?.cancel();
+    super.dispose();
   }
 
   String _dateKey(DateTime dt) {
@@ -80,7 +101,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   String _scoreComment() {
-    if ((_quality['needsRetake'] == true)) {
+    if (_quality['needsRetake'] == true) {
       return _retakeMessage();
     }
     if (_overall >= 85) {
@@ -98,7 +119,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   String _labelForScore(String key) {
     switch (key) {
       case 'rom':
-        return '팔 올리기';
+        return '동작 범위';
       case 'compensation':
         return '몸통 안정성';
       case 'symmetry':
@@ -112,13 +133,245 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     }
   }
 
+  String _exerciseName(int id) {
+    switch (id) {
+      case 0:
+        return '팔 앞으로 들기';
+      case 1:
+        return '팔 옆으로 들기';
+      case 2:
+        return '머리 만지기';
+      case 3:
+        return '허리 뒤로 손 가져가기';
+      case 4:
+        return '앞으로 손 뻗기';
+      case 5:
+        return '옆으로 손 뻗기';
+      case 6:
+        return '팔 굽히기';
+      case 7:
+        return '팔 펴기';
+      default:
+        return '운동';
+    }
+  }
+
+  int _recommendedExerciseId() {
+    final scoreMap = <String, int>{
+      'rom': _rom,
+      'compensation': _compensation,
+      'symmetry': _symmetry,
+      'smoothness': _smoothness,
+      'timing': _timing,
+    };
+
+    String lowestKey = 'rom';
+    int lowestValue = 999;
+
+    scoreMap.forEach((key, value) {
+      if (value < lowestValue) {
+        lowestValue = value;
+        lowestKey = key;
+      }
+    });
+
+    switch (lowestKey) {
+      case 'rom':
+        return _exerciseId;
+      case 'compensation':
+        return 0;
+      case 'symmetry':
+        return 1;
+      case 'smoothness':
+        return 6;
+      case 'timing':
+        return 4;
+      default:
+        return _exerciseId;
+    }
+  }
+
+  String _recommendedReason() {
+    final scoreMap = <String, int>{
+      'rom': _rom,
+      'compensation': _compensation,
+      'symmetry': _symmetry,
+      'smoothness': _smoothness,
+      'timing': _timing,
+    };
+
+    String lowestKey = 'rom';
+    int lowestValue = 999;
+
+    scoreMap.forEach((key, value) {
+      if (value < lowestValue) {
+        lowestValue = value;
+        lowestKey = key;
+      }
+    });
+
+    switch (lowestKey) {
+      case 'rom':
+        return '${_exerciseName(_exerciseId)} 기능이 더 필요해 같은 동작을 한 번 더 추천해요.';
+      case 'compensation':
+        return '몸통 보상을 줄이며 안정적으로 움직이기 위해 팔 앞으로 들기를 추천해요.';
+      case 'symmetry':
+        return '좌우 균형 향상을 위해 팔 옆으로 들기를 추천해요.';
+      case 'smoothness':
+        return '움직임을 더 부드럽게 하기 위해 팔 굽히기를 추천해요.';
+      case 'timing':
+        return '목표 지점을 향한 타이밍 연습을 위해 앞으로 손 뻗기를 추천해요.';
+      default:
+        return '현재 상태를 바탕으로 다음 운동을 추천해요.';
+    }
+  }
+
+  bool get _isLastScreeningItem {
+    if (!_isScreening) return false;
+    return _screeningIndex >= _screeningTotal - 1;
+  }
+
+  int? _nextScreeningExerciseId() {
+    if (_isLastScreeningItem) return null;
+    final nextIndex = _screeningIndex + 1;
+    if (nextIndex < 0 || nextIndex >= _screeningExerciseIds.length) return null;
+    return _screeningExerciseIds[nextIndex];
+  }
+
+  bool get _hasRoutine => _fromRoutine && _routineExerciseIds.isNotEmpty;
+
+  bool get _isLastRoutineItem {
+    if (!_hasRoutine) return false;
+    return _routineIndex >= _routineExerciseIds.length - 1;
+  }
+
+  int? _nextRoutineExerciseId() {
+    if (!_hasRoutine || _isLastRoutineItem) return null;
+    return _routineExerciseIds[_routineIndex + 1];
+  }
+
+  void _startAutoNext() {
+    _autoTimer?.cancel();
+    _secondsLeft = 5;
+
+    _autoTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_secondsLeft <= 1) {
+        timer.cancel();
+        if (_isScreening) {
+          _goNextScreeningStep();
+        } else if (_hasRoutine) {
+          _goNextRoutineStep();
+        } else {
+          _goRecommendedExercise();
+        }
+      } else {
+        setState(() {
+          _secondsLeft -= 1;
+        });
+      }
+    });
+  }
+
+  void _goRecommendedExercise() {
+    _autoTimer?.cancel();
+
+    context.push('/record', extra: {
+      'patientId': _patientId,
+      'exerciseId': _recommendedExerciseId(),
+      'sessionUuid': DateTime.now().microsecondsSinceEpoch.toString(),
+      'affectedSide': _affectedSide,
+    });
+  }
+
+  void _goNextRoutineStep() {
+    _autoTimer?.cancel();
+
+    if (_isLastRoutineItem) {
+      context.push('/results', extra: {
+        'patientId': _patientId,
+        'affectedSide': _affectedSide,
+      });
+      return;
+    }
+
+    final nextExerciseId = _nextRoutineExerciseId();
+    if (nextExerciseId == null) {
+      context.push('/results', extra: {
+        'patientId': _patientId,
+        'affectedSide': _affectedSide,
+      });
+      return;
+    }
+
+    context.push('/record', extra: {
+      'patientId': _patientId,
+      'exerciseId': nextExerciseId,
+      'sessionUuid': DateTime.now().microsecondsSinceEpoch.toString(),
+      'affectedSide': _affectedSide,
+      'routineExerciseIds': _routineExerciseIds,
+      'routineIndex': _routineIndex + 1,
+      'fromRoutine': true,
+    });
+  }
+
+  void _goNextScreeningStep() {
+    _autoTimer?.cancel();
+
+    if (_isLastScreeningItem) {
+      context.go('/exercise', extra: {
+        'patientId': _patientId,
+        'affectedSide': _affectedSide,
+        'fromScreening': true,
+      });
+      return;
+    }
+
+    final nextExerciseId = _nextScreeningExerciseId();
+    if (nextExerciseId == null) {
+      context.go('/exercise', extra: {
+        'patientId': _patientId,
+        'affectedSide': _affectedSide,
+        'fromScreening': true,
+      });
+      return;
+    }
+
+    context.push('/record', extra: {
+      'patientId': _patientId,
+      'exerciseId': nextExerciseId,
+      'sessionUuid': 'screening_${DateTime.now().microsecondsSinceEpoch}',
+      'affectedSide': _affectedSide,
+      'isScreening': true,
+      'screeningIndex': _screeningIndex + 1,
+      'screeningTotal': _screeningTotal,
+    });
+  }
+
   Future<void> _saveScore() async {
     try {
       final extra = GoRouterState.of(context).extra;
       final data = (extra is Map) ? extra : null;
 
-      final affectedSide = data?['affectedSide'] as String? ?? 'L';
-      _affectedSide = affectedSide;
+      _affectedSide = (data?['affectedSide'] as String?) ?? 'L';
+
+      _isScreening = (data?['isScreening'] as bool?) ?? false;
+      _screeningIndex = (data?['screeningIndex'] as int?) ?? 0;
+      _screeningTotal =
+          (data?['screeningTotal'] as int?) ?? _screeningExerciseIds.length;
+
+      _fromRoutine = (data?['fromRoutine'] as bool?) ?? false;
+      final rawRoutineIds = data?['routineExerciseIds'];
+      if (rawRoutineIds is List) {
+        _routineExerciseIds = rawRoutineIds.map((e) => e as int).toList();
+      } else {
+        _routineExerciseIds = [];
+      }
+      _routineIndex = (data?['routineIndex'] as int?) ?? 0;
 
       final patientId = data?['patientId'] as int?;
       final modelPath = data?['modelPath'] as String?;
@@ -135,21 +388,22 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       final now = DateTime.now();
       final todayKey = _dateKey(now);
-      final sessionUuid = incomingSessionUuid ?? DateTime.now().microsecondsSinceEpoch.toString();
+      final sessionUuid =
+          incomingSessionUuid ?? DateTime.now().microsecondsSinceEpoch.toString();
       _sessionUuid = sessionUuid;
 
       final isar = IsarDB.instance;
-
       final allLogs = await isar.sessionLogs.where().findAll();
 
-      final existingImitLogs = allLogs.where((log) =>
+      final existingImitLogs = allLogs
+          .where((log) =>
       log.patientId == patientId &&
           log.exerciseId == exerciseId &&
           log.dateKey == todayKey &&
-          log.isReference == false).toList();
+          log.isReference == false)
+          .toList();
 
-      final attemptIndex = existingImitLogs.length + 1;
-      _attemptIndex = attemptIndex;
+      _attemptIndex = existingImitLogs.length + 1;
 
       final result = await _analyzeViaServer(
         referenceVideoPath: modelPath,
@@ -165,9 +419,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _quality = result.quality;
       _features = result.features;
 
-      final existingRefs = allLogs.where((log) =>
-      log.sessionUuid == sessionUuid &&
-          log.isReference == true).toList();
+      final existingRefs = allLogs
+          .where((log) => log.sessionUuid == sessionUuid && log.isReference == true)
+          .toList();
 
       final refExists = existingRefs.isNotEmpty;
 
@@ -197,7 +451,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ..dateKey = todayKey
         ..sessionUuid = sessionUuid
         ..isReference = false
-        ..attemptIndex = attemptIndex
+        ..attemptIndex = _attemptIndex
         ..overall = result.overall
         ..symmetry = result.symmetry
         ..timing = result.timing
@@ -218,6 +472,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       if (!mounted) return;
       setState(() => _saving = false);
+
+      if (!(result.quality['needsRetake'] == true)) {
+        _startAutoNext();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -248,8 +506,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
     final j = jsonDecode(resp.body) as Map<String, dynamic>;
 
-    final features = (j['features'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
-    final quality = (j['quality'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final features =
+        (j['features'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final quality =
+        (j['quality'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
 
     int asInt(dynamic v) => (v is num) ? v.round() : int.parse(v.toString());
 
@@ -292,9 +552,13 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   @override
   Widget build(BuildContext context) {
     final needsRetake = _quality['needsRetake'] == true;
+    final nextScreeningExerciseId = _nextScreeningExerciseId();
+    final nextRoutineExerciseId = _nextRoutineExerciseId();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('피드백')),
+      appBar: AppBar(
+        title: Text(_isScreening ? '평가 결과' : '피드백'),
+      ),
       body: SafeArea(
         child: _saving
             ? const Center(child: CircularProgressIndicator())
@@ -394,18 +658,252 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: ElevatedButton(
-                  onPressed: () {
-                    context.push('/results', extra: {
-                      'patientId': _patientId,
-                    });
-                  },
-                  child: const Text('결과 보기'),
+
+              if (!needsRetake && !_isScreening && _hasRoutine) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _isLastRoutineItem ? '오늘의 루틴 완료' : '다음 루틴 운동',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _isLastRoutineItem
+                            ? '모든 추천 운동을 완료했어요.'
+                            : _exerciseName(nextRoutineExerciseId ?? 0),
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _isLastRoutineItem
+                            ? '결과 화면으로 이동합니다.'
+                            : '$_secondsLeft초 후 다음 운동으로 자동 진행합니다.',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: _goNextRoutineStep,
+                    child: Text(
+                      _isLastRoutineItem
+                          ? '결과 보기'
+                          : '${_exerciseName(nextRoutineExerciseId ?? 0)} 시작',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      _autoTimer?.cancel();
+                      context.push('/results', extra: {
+                        'patientId': _patientId,
+                        'affectedSide': _affectedSide,
+                      });
+                    },
+                    child: const Text('오늘 루틴 종료'),
+                  ),
+                ),
+              ] else if (!needsRetake && !_isScreening) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '다음 추천 운동',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _exerciseName(_recommendedExerciseId()),
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _recommendedReason(),
+                        style: const TextStyle(fontSize: 14, height: 1.4),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        '$_secondsLeft초 후 자동으로 시작합니다.',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.blue,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: _goRecommendedExercise,
+                    child: Text(
+                      '${_exerciseName(_recommendedExerciseId())} 지금 시작',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      _autoTimer?.cancel();
+                      context.push('/exercise', extra: {
+                        'patientId': _patientId,
+                        'affectedSide': _affectedSide,
+                      });
+                    },
+                    child: const Text('운동 직접 선택'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: TextButton(
+                    onPressed: () {
+                      _autoTimer?.cancel();
+                      context.push('/results', extra: {
+                        'patientId': _patientId,
+                        'affectedSide': _affectedSide,
+                      });
+                    },
+                    child: const Text('오늘은 여기까지'),
+                  ),
+                ),
+              ] else if (!needsRetake && _isScreening) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.purple.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _isLastScreeningItem ? '평가 완료' : '다음 평가 동작',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _isLastScreeningItem
+                            ? '모든 평가 동작이 끝났어요.'
+                            : _exerciseName(nextScreeningExerciseId ?? 0),
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _isLastScreeningItem
+                            ? '현재 상태 평가가 완료되어 운동 선택 화면으로 돌아갑니다.'
+                            : '현재 상태 평가를 계속 진행합니다.',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        '$_secondsLeft초 후 자동으로 진행합니다.',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.blue,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: _goNextScreeningStep,
+                    child: Text(
+                      _isLastScreeningItem
+                          ? '평가 완료'
+                          : '${_exerciseName(nextScreeningExerciseId ?? 0)} 진행',
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      _autoTimer?.cancel();
+                      context.go('/exercise', extra: {
+                        'patientId': _patientId,
+                        'affectedSide': _affectedSide,
+                        'fromScreening': true,
+                      });
+                    },
+                    child: const Text('평가 종료하고 운동 선택으로'),
+                  ),
+                ),
+              ] else ...[
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      _autoTimer?.cancel();
+                      context.pop();
+                    },
+                    child: const Text('다시 촬영하기'),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
