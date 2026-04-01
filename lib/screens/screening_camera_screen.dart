@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+
+import 'screening_plan.dart';
 
 class ScreeningCameraScreen extends StatefulWidget {
   const ScreeningCameraScreen({super.key});
@@ -13,9 +16,18 @@ class ScreeningCameraScreen extends StatefulWidget {
 
 class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
   CameraController? _controller;
+
   bool _initializing = true;
   bool _recording = false;
+  bool _autoFlowStarted = false;
+
   XFile? _videoFile;
+
+  int _prepareSeconds = 3;
+  int _recordSeconds = 5;
+
+  Timer? _prepareTimer;
+  Timer? _recordTimer;
 
   @override
   void initState() {
@@ -26,7 +38,8 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
   Future<void> _initCamera() async {
     try {
       final cameras = await availableCameras();
-      final front = cameras.where((c) => c.lensDirection == CameraLensDirection.front);
+      final front =
+      cameras.where((c) => c.lensDirection == CameraLensDirection.front);
       final selected = front.isNotEmpty ? front.first : cameras.first;
 
       final controller = CameraController(
@@ -42,6 +55,8 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
         _controller = controller;
         _initializing = false;
       });
+
+      _startAutoFlow();
     } catch (e) {
       if (!mounted) return;
       setState(() => _initializing = false);
@@ -53,35 +68,93 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
 
   @override
   void dispose() {
+    _prepareTimer?.cancel();
+    _recordTimer?.cancel();
     _controller?.dispose();
     super.dispose();
   }
 
-  Future<void> _toggleRecord() async {
+  void _startAutoFlow() {
+    if (_autoFlowStarted) return;
+    _autoFlowStarted = true;
+
+    _prepareSeconds = 3;
+    _prepareTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_prepareSeconds <= 1) {
+        timer.cancel();
+        setState(() {
+          _prepareSeconds = 0;
+        });
+        await _startRecordingAuto();
+      } else {
+        setState(() {
+          _prepareSeconds -= 1;
+        });
+      }
+    });
+  }
+
+  Future<void> _startRecordingAuto() async {
     final c = _controller;
     if (c == null || !c.value.isInitialized) return;
 
     try {
-      if (_recording) {
-        final file = await c.stopVideoRecording();
-        if (!mounted) return;
-        setState(() {
-          _recording = false;
-          _videoFile = file;
-        });
-      } else {
-        await c.prepareForVideoRecording();
-        await c.startVideoRecording();
-        if (!mounted) return;
-        setState(() {
-          _recording = true;
-          _videoFile = null;
-        });
-      }
+      await c.prepareForVideoRecording();
+      await c.startVideoRecording();
+
+      if (!mounted) return;
+      setState(() {
+        _recording = true;
+        _videoFile = null;
+        _recordSeconds = 5;
+      });
+
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+
+        if (_recordSeconds <= 1) {
+          timer.cancel();
+          await _stopRecordingAutoAndAnalyze();
+        } else {
+          setState(() {
+            _recordSeconds -= 1;
+          });
+        }
+      });
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('녹화 오류: $e')),
+        SnackBar(content: Text('자동 녹화 시작 실패: $e')),
+      );
+    }
+  }
+
+  Future<void> _stopRecordingAutoAndAnalyze() async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized || !_recording) return;
+
+    try {
+      final file = await c.stopVideoRecording();
+
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _videoFile = file;
+      });
+
+      _goAnalyze();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('자동 녹화 종료 실패: $e')),
       );
     }
   }
@@ -90,16 +163,40 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
     final extra = GoRouterState.of(context).extra;
     final data = (extra is Map) ? extra : null;
 
+    final int? patientId = data?['patientId'] as int?;
+    final String affectedSide = (data?['affectedSide'] as String?) ?? 'L';
+
+    final int screeningIndex = (data?['screeningIndex'] as int?) ?? 0;
+    final int screeningTotal =
+        (data?['screeningTotal'] as int?) ?? screeningFunctionItems.length;
+    final String screeningSessionUuid =
+        (data?['screeningSessionUuid'] as String?) ?? '';
+    final Map<String, int> screeningScores =
+        (data?['screeningScores'] as Map?)
+            ?.map((k, v) => MapEntry('$k', v as int)) ??
+            <String, int>{};
+
+    final currentItem = screeningFunctionItems[screeningIndex];
+
     final path = _videoFile?.path;
     if (path == null || path.isEmpty || !File(path).existsSync()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('먼저 녹화를 완료해 주세요.')),
+        const SnackBar(content: Text('촬영된 영상이 없습니다.')),
       );
       return;
     }
 
-    context.push('/screening-analyze', extra: {
-      ...?data,
+    context.go('/screening-analyze', extra: {
+      'patientId': patientId,
+      'affectedSide': affectedSide,
+      'exerciseId': currentItem.exerciseId,
+      'functionKey': currentItem.functionKey,
+      'title': currentItem.title,
+      'desc': currentItem.desc,
+      'screeningIndex': screeningIndex,
+      'screeningTotal': screeningTotal,
+      'screeningSessionUuid': screeningSessionUuid,
+      'screeningScores': screeningScores,
       'videoPath': path,
     });
   }
@@ -107,9 +204,7 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
   Alignment? _targetAlignment(int exerciseId) {
     switch (exerciseId) {
       case 4:
-        return const Alignment(0.0, -0.15); // 앞으로 손 뻗기: 중앙 앞쪽
-      case 5:
-        return const Alignment(0.65, 0.0); // 옆으로 손 뻗기: 오른쪽 옆
+        return const Alignment(0.0, -0.15);
       default:
         return null;
     }
@@ -145,16 +240,33 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
     );
   }
 
+  String _statusText() {
+    if (_initializing) {
+      return '카메라를 준비하고 있습니다.';
+    }
+    if (_recording) {
+      return '지금 동작을 수행해 주세요. $_recordSeconds초 남았어요.';
+    }
+    if (_prepareSeconds > 0) {
+      return '준비해 주세요. $_prepareSeconds초 후 시작합니다.';
+    }
+    return '영상 확인 중입니다.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final extra = GoRouterState.of(context).extra;
     final data = (extra is Map) ? extra : null;
-    final title = (data?['title'] as String?) ?? '평가 동작';
-    final desc = (data?['desc'] as String?) ?? '';
-    final exerciseId = (data?['exerciseId'] as int?) ?? 0;
+
+    final int screeningIndex = (data?['screeningIndex'] as int?) ?? 0;
+    final int screeningTotal =
+        (data?['screeningTotal'] as int?) ?? screeningFunctionItems.length;
+    final currentItem = screeningFunctionItems[screeningIndex];
 
     return Scaffold(
-      appBar: AppBar(title: const Text('현재 상태 촬영')),
+      appBar: AppBar(
+        title: const Text('상지 기능 평가'),
+      ),
       body: _initializing
           ? const Center(child: CircularProgressIndicator())
           : (_controller == null || !_controller!.value.isInitialized)
@@ -163,22 +275,42 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
         children: [
           Container(
             width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             padding: const EdgeInsets.all(16),
-            color: Colors.blue.shade50,
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(14),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  title,
+                  '상지 기능 평가 ${screeningIndex + 1} / $screeningTotal',
                   style: const TextStyle(
-                    fontSize: 22,
+                    fontSize: 15,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  desc,
-                  style: const TextStyle(fontSize: 15, height: 1.5),
+                  currentItem.title,
+                  style: const TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  currentItem.desc,
+                  style: const TextStyle(fontSize: 14),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _statusText(),
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey.shade700,
+                  ),
                 ),
               ],
             ),
@@ -188,7 +320,28 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
               fit: StackFit.expand,
               children: [
                 CameraPreview(_controller!),
-                _buildTargetOverlay(exerciseId),
+                _buildTargetOverlay(currentItem.exerciseId),
+                if (_prepareSeconds > 0 && !_recording)
+                  Center(
+                    child: Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black.withOpacity(0.45),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '$_prepareSeconds',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 44,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -196,28 +349,15 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: _toggleRecord,
-                        child: Text(_recording ? '녹화 중지' : '녹화 시작'),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: SizedBox(
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: _recording ? null : _goAnalyze,
-                        child: const Text('분석하기'),
-                      ),
-                    ),
-                  ),
-                ],
+              child: SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: OutlinedButton(
+                  onPressed: () {
+                    context.pop();
+                  },
+                  child: const Text('평가 중단하기'),
+                ),
               ),
             ),
           ),

@@ -14,70 +14,19 @@ class ExerciseSelectPage extends StatefulWidget {
 }
 
 class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
-  bool _checkingScreening = true;
-  bool _didAutoNavigate = false;
-
-  /// 추천 운동 id 목록 (최대 3개)
   List<int> _recommendedIds = [];
+  bool _loadingRecommendations = true;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initializePage());
-  }
-
-  Future<void> _initializePage() async {
-    await _checkAndAutoScreening();
-    if (!mounted || _didAutoNavigate) return;
-    await _loadRecommendedExercises();
-  }
-
-  Future<void> _checkAndAutoScreening() async {
-    if (_didAutoNavigate || !mounted) return;
-
-    final extra = GoRouterState.of(context).extra;
-    final data = (extra is Map) ? extra : null;
-
-    final int? patientId = data?['patientId'] as int?;
-    final String affectedSide = (data?['affectedSide'] as String?) ?? 'L';
-    final bool fromScreening = (data?['fromScreening'] as bool?) ?? false;
-
-    if (patientId == null) {
-      setState(() => _checkingScreening = false);
-      return;
-    }
-
-    if (fromScreening) {
-      setState(() => _checkingScreening = false);
-      return;
-    }
-
-    try {
-      final isar = IsarDB.instance;
-      final List<SessionLog> allLogs = await isar.sessionLogs.where().findAll();
-
-      final hasScreeningHistory = allLogs.any(
-            (log) =>
-        log.patientId == patientId &&
-            log.sessionUuid.startsWith('screening_'),
-      );
-
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _loadRecommendedExercises();
       if (!mounted) return;
-
-      if (!hasScreeningHistory) {
-        _didAutoNavigate = true;
-        context.go('/screening', extra: {
-          'patientId': patientId,
-          'affectedSide': affectedSide,
-        });
-        return;
-      }
-
-      setState(() => _checkingScreening = false);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _checkingScreening = false);
-    }
+      setState(() {
+        _loadingRecommendations = false;
+      });
+    });
   }
 
   Future<void> _loadRecommendedExercises() async {
@@ -86,11 +35,10 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     final int? patientId = data?['patientId'] as int?;
 
     if (patientId == null) {
-      if (mounted) {
-        setState(() {
-          _recommendedIds = [];
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _recommendedIds = [];
+      });
       return;
     }
 
@@ -99,22 +47,22 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
       final List<SessionLog> allLogs = await isar.sessionLogs.where().findAll();
 
       final screeningLogs = allLogs
-          .where((log) =>
-      log.patientId == patientId &&
-          log.sessionUuid.startsWith('screening_') &&
-          log.isReference == false)
+          .where(
+            (log) =>
+        log.patientId == patientId &&
+            log.sessionUuid.startsWith('screening_') &&
+            log.isReference == false,
+      )
           .toList();
 
       if (screeningLogs.isEmpty) {
-        if (mounted) {
-          setState(() {
-            _recommendedIds = [];
-          });
-        }
+        if (!mounted) return;
+        setState(() {
+          _recommendedIds = [];
+        });
         return;
       }
 
-      // 가장 최근 screening sessionUuid 찾기
       screeningLogs.sort((a, b) => b.timestampKst.compareTo(a.timestampKst));
       final latestScreeningSessionUuid = screeningLogs.first.sessionUuid;
 
@@ -122,7 +70,6 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
           .where((log) => log.sessionUuid == latestScreeningSessionUuid)
           .toList();
 
-      // 점수 낮은 순으로 정렬해서 상위 3개 추천
       latestScreeningLogs.sort((a, b) => a.overall.compareTo(b.overall));
 
       final recommended = latestScreeningLogs
@@ -131,18 +78,44 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
           .take(3)
           .toList();
 
-      if (mounted) {
-        setState(() {
-          _recommendedIds = recommended;
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _recommendedIds = recommended;
+      });
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _recommendedIds = [];
-        });
-      }
+      if (!mounted) return;
+      setState(() {
+        _recommendedIds = [];
+      });
     }
+  }
+
+  void _startTodayRoutine(int? patientId, String affectedSide) {
+    if (patientId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('먼저 사용자를 선택해 주세요.')),
+      );
+      return;
+    }
+
+    if (_recommendedIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('추천 운동이 없습니다. 먼저 현재 상태 평가를 진행해 주세요.')),
+      );
+      return;
+    }
+
+    final sessionUuid = DateTime.now().microsecondsSinceEpoch.toString();
+
+    context.go('/record', extra: {
+      'patientId': patientId,
+      'exerciseId': _recommendedIds.first,
+      'sessionUuid': sessionUuid,
+      'affectedSide': affectedSide,
+      'routineExerciseIds': _recommendedIds,
+      'routineIndex': 0,
+      'fromRoutine': true,
+    });
   }
 
   Widget _screeningCard(
@@ -163,7 +136,6 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
             'affectedSide': affectedSide,
           });
 
-          // screening 후 돌아왔을 때 추천 다시 계산
           if (mounted) {
             await _loadRecommendedExercises();
           }
@@ -195,7 +167,7 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
                     ),
                     SizedBox(height: 4),
                     Text(
-                      '간단한 동작 테스트로 현재 팔 상태를 확인해요.',
+                      '간단한 동작 테스트로 현재 상지 기능을 확인해요.',
                       style: TextStyle(
                         fontSize: 14,
                         color: Colors.black54,
@@ -263,18 +235,34 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     final items = Exercises.list;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('동작 선택')),
-      body: _checkingScreening
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
+      appBar: AppBar(title: const Text('운동 선택')),
+      body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _screeningCard(context, patientId, affectedSide),
             const SizedBox(height: 16),
-
-            if (_recommendedIds.isNotEmpty) ...[
+            if (_loadingRecommendations)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  '추천 운동을 불러오는 중입니다.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              )
+            else if (_recommendedIds.isNotEmpty) ...[
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(
@@ -286,7 +274,36 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Text(
-                  '추천 운동이 표시되어 있어요. 현재 상태를 바탕으로 먼저 해보세요.',
+                  '추천 운동이 표시되어 있어요. 오늘의 운동을 바로 시작할 수 있어요.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: () => _startTodayRoutine(patientId, affectedSide),
+                  child: const Text('오늘의 운동 시작하기'),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ] else ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  '원하는 운동을 선택해서 바로 시작할 수 있어요.',
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
@@ -295,7 +312,6 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
               ),
               const SizedBox(height: 12),
             ],
-
             const Text(
               '운동 목록',
               style: TextStyle(
@@ -304,7 +320,6 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
               ),
             ),
             const SizedBox(height: 10),
-
             Expanded(
               child: ListView.separated(
                 itemCount: items.length,
@@ -335,7 +350,7 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
                       final sessionUuid =
                       DateTime.now().microsecondsSinceEpoch.toString();
 
-                      context.push('/record', extra: {
+                      context.go('/record', extra: {
                         'patientId': patientId,
                         'exerciseId': it.id,
                         'sessionUuid': sessionUuid,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/session_log.dart';
 import '../storage/isar_db.dart';
+import 'screening_plan.dart';
 
 String _serverBaseUrl() {
   return 'http://192.168.10.107:5000';
@@ -20,7 +22,12 @@ class ScreeningAnalyzeScreen extends StatefulWidget {
 
 class _ScreeningAnalyzeScreenState extends State<ScreeningAnalyzeScreen> {
   bool _loading = true;
+  bool _finishing = false;
   String? _error;
+
+  int _screeningIndex = 0;
+  int _screeningTotal = screeningFunctionItems.length;
+  String _statusText = '상지 기능을 분석하고 있습니다.';
 
   @override
   void initState() {
@@ -45,14 +52,33 @@ class _ScreeningAnalyzeScreenState extends State<ScreeningAnalyzeScreen> {
       final int exerciseId = (data?['exerciseId'] as int?) ?? 0;
       final String functionKey = (data?['functionKey'] as String?) ?? '';
       final int screeningIndex = (data?['screeningIndex'] as int?) ?? 0;
-      final int screeningTotal = (data?['screeningTotal'] as int?) ?? 5;
+      final int screeningTotal =
+          (data?['screeningTotal'] as int?) ?? screeningFunctionItems.length;
       final String screeningSessionUuid =
           (data?['screeningSessionUuid'] as String?) ?? '';
+      final Map<String, int> screeningScores =
+          (data?['screeningScores'] as Map?)
+              ?.map((k, v) => MapEntry('$k', v as int)) ??
+              <String, int>{};
+
       final String? videoPath = data?['videoPath'] as String?;
 
-      if (patientId == null) throw Exception('patientId가 없습니다.');
+      if (patientId == null) {
+        throw Exception('patientId가 없습니다.');
+      }
       if (videoPath == null || videoPath.isEmpty) {
         throw Exception('videoPath가 없습니다.');
+      }
+      if (functionKey.isEmpty) {
+        throw Exception('functionKey가 없습니다.');
+      }
+
+      if (mounted) {
+        setState(() {
+          _screeningIndex = screeningIndex;
+          _screeningTotal = screeningTotal;
+          _statusText = '상지 기능을 분석하고 있습니다.';
+        });
       }
 
       final uri = Uri.parse('${_serverBaseUrl()}/screening_analyze');
@@ -74,6 +100,9 @@ class _ScreeningAnalyzeScreenState extends State<ScreeningAnalyzeScreen> {
       final overall = (j['overall'] as num).round();
       final quality = (j['quality'] as Map?)?.cast<String, dynamic>() ?? {};
       final features = (j['features'] as Map?)?.cast<String, dynamic>() ?? {};
+
+      final updatedScores = Map<String, int>.from(screeningScores);
+      updatedScores[functionKey] = overall;
 
       final now = DateTime.now();
       final log = SessionLog()
@@ -106,78 +135,50 @@ class _ScreeningAnalyzeScreenState extends State<ScreeningAnalyzeScreen> {
 
       if (!mounted) return;
 
-      if (screeningIndex < screeningTotal - 1) {
-        final nextItems = [0, 1, 2, 3, 4, 5, 6, 7];
-    final nextExerciseId = nextItems[screeningIndex + 1];
+      final bool isLast = screeningIndex >= screeningTotal - 1;
 
-    String nextTitle;
-    String nextDesc;
-    String nextFunctionKey;
+      setState(() {
+        _loading = false;
+        _finishing = true;
+        _statusText = isLast
+            ? '평가 결과를 정리하고 있습니다.'
+            : '다음 동작으로 넘어갑니다.';
+      });
 
-    switch (nextExerciseId) {
-    case 0:
-    nextTitle = '팔 앞으로 들기';
-    nextDesc = '가능한 만큼 팔을 앞으로 천천히 들어보세요.';
-    nextFunctionKey = 'flexion';
-    break;
-    case 1:
-    nextTitle = '팔 옆으로 들기';
-    nextDesc = '가능한 만큼 팔을 옆으로 천천히 들어보세요.';
-    nextFunctionKey = 'abduction';
-    break;
-    case 2:
-    nextTitle = '머리 만지기';
-    nextDesc = '손을 머리 쪽으로 천천히 가져가 보세요.';
-    nextFunctionKey = 'hand_to_head';
-    break;
-    case 3:
-    nextTitle = '허리 뒤로 손 가져가기';
-    nextDesc = '손을 허리 뒤쪽으로 천천히 가져가 보세요.';
-    nextFunctionKey = 'hand_to_back';
-    break;
-    case 4:
-    nextTitle = '앞으로 손 뻗기';
-    nextDesc = '화면의 목표 지점을 향해 손을 앞으로 뻗어보세요.';
-    nextFunctionKey = 'reach_forward';
-    break;
-    case 5:
-    nextTitle = '옆으로 손 뻗기';
-    nextDesc = '화면의 목표 지점을 향해 손을 옆으로 뻗어보세요.';
-    nextFunctionKey = 'reach_side';
-    break;
-    case 6:
-    nextTitle = '팔 굽히기';
-    nextDesc = '팔꿈치를 천천히 굽혀보세요.';
-    nextFunctionKey = 'elbow_flexion';
-    break;
-    default:
-    nextTitle = '팔 펴기';
-    nextDesc = '팔꿈치를 천천히 펴보세요.';
-    nextFunctionKey = 'elbow_extension';
-    }
+      await Future.delayed(const Duration(milliseconds: 900));
 
-        context.go('/screening-camera', extra: {
-          'patientId': patientId,
-          'affectedSide': affectedSide,
-          'exerciseId': nextExerciseId,
-          'functionKey': nextFunctionKey,
-          'title': nextTitle,
-          'desc': nextDesc,
-          'screeningIndex': screeningIndex + 1,
-          'screeningTotal': screeningTotal,
-          'screeningSessionUuid': screeningSessionUuid,
-        });
-      } else {
+      if (!mounted) return;
+
+      if (isLast) {
         context.go('/screening-result', extra: {
           'patientId': patientId,
           'affectedSide': affectedSide,
           'screeningSessionUuid': screeningSessionUuid,
+          'screeningScores': updatedScores,
         });
+        return;
       }
+
+      final nextIndex = screeningIndex + 1;
+      final nextItem = screeningFunctionItems[nextIndex];
+
+      context.go('/screening-camera', extra: {
+        'patientId': patientId,
+        'affectedSide': affectedSide,
+        'screeningIndex': nextIndex,
+        'screeningTotal': screeningTotal,
+        'screeningSessionUuid': screeningSessionUuid,
+        'screeningScores': updatedScores,
+        'exerciseId': nextItem.exerciseId,
+        'functionKey': nextItem.functionKey,
+        'title': nextItem.title,
+        'desc': nextItem.desc,
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
+        _finishing = false;
         _error = e.toString();
       });
     }
@@ -185,17 +186,65 @@ class _ScreeningAnalyzeScreenState extends State<ScreeningAnalyzeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final stepText = '${_screeningIndex + 1} / $_screeningTotal';
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('스크리닝 분석 중'),
+        title: const Text('상지 기능 분석'),
       ),
       body: Center(
         child: _error != null
             ? Padding(
           padding: const EdgeInsets.all(20),
-          child: Text('오류: $_error'),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '오류: $_error',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: 180,
+                height: 48,
+                child: OutlinedButton(
+                  onPressed: () {
+                    context.pop();
+                  },
+                  child: const Text('이전 화면으로'),
+                ),
+              ),
+            ],
+          ),
         )
-            : const CircularProgressIndicator(),
+            : Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 20),
+            Text(
+              _finishing ? '분석이 완료되었습니다.' : '상지 기능을 분석하고 있습니다.',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '$stepText 동작',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _statusText,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Colors.black54,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }

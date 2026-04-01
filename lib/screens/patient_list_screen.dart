@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:isar/isar.dart';
 
 import '../models/patient.dart';
+import '../models/session_log.dart';
+import '../storage/isar_db.dart';
 import '../storage/patient_store.dart';
 
 class PatientListScreen extends StatefulWidget {
@@ -29,6 +32,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
       if (!mounted) return;
       setState(() {
         _patients = patients;
+        _error = null;
         _loading = false;
       });
     } catch (e) {
@@ -37,6 +41,64 @@ class _PatientListScreenState extends State<PatientListScreen> {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _confirmDeletePatient(Patient patient) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('환자 삭제'),
+        content: Text(
+          '${patient.name} 환자 정보를 삭제하시겠습니까?\n운동 기록도 함께 삭제됩니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok == true) {
+      await _deletePatient(patient.id);
+    }
+  }
+
+  Future<void> _deletePatient(int patientId) async {
+    try {
+      final isar = IsarDB.instance;
+
+      await isar.writeTxn(() async {
+        final logs = await isar.sessionLogs
+            .filter()
+            .patientIdEqualTo(patientId)
+            .findAll();
+
+        final logIds = logs.map((e) => e.id).toList();
+        if (logIds.isNotEmpty) {
+          await isar.sessionLogs.deleteAll(logIds);
+        }
+
+        await isar.patients.delete(patientId);
+      });
+
+      await _loadPatients();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('환자 정보가 삭제되었습니다.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('삭제 실패: $e')),
+      );
     }
   }
 
@@ -60,11 +122,29 @@ class _PatientListScreenState extends State<PatientListScreen> {
     return '$y-$m-$d';
   }
 
+  void _goToNewPatient() {
+    context.go('/patient-form');
+  }
+
+  void _selectPatient(Patient p) {
+    context.go('/exercise', extra: {
+      'patientId': p.id,
+      'affectedSide': p.affectedSide,
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('기존 사용자 불러오기'),
+        title: const Text('사용자 선택'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person_add_alt_1),
+            tooltip: '새 사용자 등록',
+            onPressed: _goToNewPatient,
+          ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -87,11 +167,13 @@ class _PatientListScreenState extends State<PatientListScreen> {
                 style: TextStyle(fontSize: 18),
               ),
               const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () {
-                  context.go('/patient-form');
-                },
-                child: const Text('새 사용자 등록하기'),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: _goToNewPatient,
+                  child: const Text('새 사용자 등록하기'),
+                ),
               ),
             ],
           ),
@@ -121,15 +203,40 @@ class _PatientListScreenState extends State<PatientListScreen> {
                     '환측: ${_sideLabel(p.affectedSide)}',
               ),
             ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              context.go('/exercise', extra: {
-                'patientId': p.id,
-                'affectedSide': p.affectedSide ?? 'L',
-              });
-            },
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    color: Colors.red,
+                  ),
+                  tooltip: '삭제',
+                  onPressed: () => _confirmDeletePatient(p),
+                ),
+                const Icon(Icons.chevron_right),
+              ],
+            ),
+            onTap: () => _selectPatient(p),
           );
         },
+      ),
+      bottomNavigationBar: _patients.isEmpty
+          ? null
+          : SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton.icon(
+              onPressed: _goToNewPatient,
+              icon: const Icon(Icons.person_add_alt_1),
+              label: const Text('새 사용자 등록하기'),
+            ),
+          ),
+        ),
       ),
     );
   }

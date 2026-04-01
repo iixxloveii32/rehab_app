@@ -1,5 +1,5 @@
 import 'package:isar/isar.dart';
-
+import '../models/session_log.dart';
 part 'session_log.g.dart';
 
 @collection

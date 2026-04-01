@@ -1,24 +1,25 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'models/patient.dart';
-import 'storage/patient_store.dart';
-import 'dart:io';
-import 'package:camera/camera.dart';
 import 'package:video_player/video_player.dart';
-import 'screens/feedback_screen.dart';
-import 'screens/results_page.dart';
+
+import 'models/patient.dart';
 import 'screens/exercise_select_page.dart';
-import 'screens/screening_screen.dart';
-import 'screens/screening_screen.dart';
-import 'screens/screening_result_page.dart';
-import 'screens/screening_camera_screen.dart';
-import 'screens/screening_analyze_screen.dart';
-import 'screens/screening_result_page.dart';
-import 'screens/start_menu_screen.dart';
+import 'screens/feedback_screen.dart';
 import 'screens/patient_list_screen.dart';
+import 'screens/results_page.dart';
+import 'screens/screening_analyze_screen.dart';
+import 'screens/screening_camera_screen.dart';
+import 'screens/screening_result_page.dart';
+import 'screens/screening_screen.dart';
+import 'storage/patient_store.dart';
+import 'utils/voice_guide.dart';
 
 final GoRouter appRouter = GoRouter(
-  initialLocation: '/',
+  initialLocation: '/patient-list',
   routes: [
     GoRoute(
       path: '/patient-form',
@@ -53,8 +54,8 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) => const ExerciseSelectPage(),
     ),
     GoRoute(
-      path: '/screening-result',
-      builder: (context, state) => const ScreeningResultPage(),
+      path: '/screening',
+      builder: (context, state) => const ScreeningScreen(),
     ),
     GoRoute(
       path: '/screening-camera',
@@ -68,11 +69,6 @@ final GoRouter appRouter = GoRouter(
       path: '/screening-result',
       builder: (context, state) => const ScreeningResultPage(),
     ),
-    GoRoute(
-      path: '/screening',
-      builder: (context, state) => const ScreeningScreen(),
-    ),
-
   ],
 );
 
@@ -100,6 +96,7 @@ class _PreviewFrame extends StatelessWidget {
     );
   }
 }
+
 double _cameraAspectRatioForScreen(BuildContext context, CameraController c) {
   final raw = c.value.aspectRatio;
   final orientation = MediaQuery.of(context).orientation;
@@ -109,6 +106,7 @@ double _cameraAspectRatioForScreen(BuildContext context, CameraController c) {
   }
   return raw;
 }
+
 class PatientFormScreen extends StatefulWidget {
   const PatientFormScreen({super.key});
 
@@ -166,6 +164,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
   Future<void> _onNext() async {
     final ok = _formKey.currentState?.validate() ?? false;
     if (!ok) return;
+
     if (_birthDate == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('생년월일을 선택해 주세요.')),
@@ -181,10 +180,11 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
         birthDate: _birthDate!,
         affectedSide: _affectedSide,
       );
+
       final patientId = await PatientStore.saveAndReturnId(patient);
 
       if (!mounted) return;
-      context.push('/exercise', extra: {
+      context.go('/exercise', extra: {
         'patientId': patientId,
         'affectedSide': _affectedSide,
       });
@@ -196,9 +196,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
   String _birthLabel() {
     if (_birthDate == null) return '생년월일 선택';
     final d = _birthDate!;
-    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day
-        .toString()
-        .padLeft(2, '0')}';
+    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -214,8 +212,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
               builder: (context, constraints) {
                 return SingleChildScrollView(
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                        minHeight: constraints.maxHeight),
+                    constraints: BoxConstraints(minHeight: constraints.maxHeight),
                     child: IntrinsicHeight(
                       child: Column(
                         children: [
@@ -232,8 +229,6 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                             },
                           ),
                           const SizedBox(height: 24),
-
-// ---- 성별 ----
                           Row(
                             children: [
                               const Text('성별: '),
@@ -251,10 +246,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 12),
-
-// ---- 환측 ----
                           Row(
                             children: [
                               const Text('환측: '),
@@ -272,9 +264,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                               ),
                             ],
                           ),
-
                           const SizedBox(height: 12),
-
                           SizedBox(
                             width: double.infinity,
                             child: OutlinedButton(
@@ -283,7 +273,6 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                             ),
                           ),
                           const Spacer(),
-
                           SizedBox(
                             width: double.infinity,
                             height: 48,
@@ -292,7 +281,6 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                               child: Text(_saving ? '저장 중...' : '다음'),
                             ),
                           ),
-
                           const SizedBox(height: 24),
                         ],
                       ),
@@ -308,10 +296,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
   }
 }
 
-
-
-
-    class RecordingScreen extends StatefulWidget {
+class RecordingScreen extends StatefulWidget {
   const RecordingScreen({super.key});
 
   @override
@@ -320,9 +305,18 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
 
 class _RecordingScreenState extends State<RecordingScreen> {
   CameraController? _controller;
+
   bool _initializing = true;
   bool _recording = false;
+  bool _autoFlowStarted = false;
+
   XFile? _videoFile;
+
+  int _prepareSeconds = 3;
+  int _recordSeconds = 6;
+
+  Timer? _prepareTimer;
+  Timer? _recordTimer;
 
   @override
   void initState() {
@@ -334,7 +328,6 @@ class _RecordingScreenState extends State<RecordingScreen> {
     try {
       final cameras = await availableCameras();
 
-      // 전면 카메라 우선
       final front =
       cameras.where((c) => c.lensDirection == CameraLensDirection.front);
       final selected = front.isNotEmpty ? front.first : cameras.first;
@@ -352,6 +345,12 @@ class _RecordingScreenState extends State<RecordingScreen> {
         _controller = controller;
         _initializing = false;
       });
+
+      await VoiceGuide.speak(
+        '건강한 쪽 팔로 천천히 정확하게 움직여 주세요. 몸이 기울어지지 않도록 주의해 주세요.',
+      );
+
+      _startAutoFlow();
     } catch (e) {
       if (!mounted) return;
       setState(() => _initializing = false);
@@ -363,35 +362,97 @@ class _RecordingScreenState extends State<RecordingScreen> {
 
   @override
   void dispose() {
+    _prepareTimer?.cancel();
+    _recordTimer?.cancel();
+    VoiceGuide.stop();
     _controller?.dispose();
     super.dispose();
   }
 
-  Future<void> _toggleRecord() async {
+  void _startAutoFlow() async {
+    if (_autoFlowStarted) return;
+    _autoFlowStarted = true;
+
+    await VoiceGuide.speak('준비해 주세요. 3초 후 촬영이 시작됩니다.');
+
+    _prepareSeconds = 3;
+    _prepareTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_prepareSeconds <= 1) {
+        timer.cancel();
+        setState(() {
+          _prepareSeconds = 0;
+        });
+        await VoiceGuide.speak('지금 시작합니다.');
+        await _startAutoRecord();
+      } else {
+        setState(() {
+          _prepareSeconds -= 1;
+        });
+      }
+    });
+  }
+
+  Future<void> _startAutoRecord() async {
     final c = _controller;
     if (c == null || !c.value.isInitialized) return;
 
     try {
-      if (_recording) {
-        final file = await c.stopVideoRecording();
-        if (!mounted) return;
-        setState(() {
-          _recording = false;
-          _videoFile = file;
-        });
-      } else {
-        await c.prepareForVideoRecording();
-        await c.startVideoRecording();
-        if (!mounted) return;
-        setState(() {
-          _recording = true;
-          _videoFile = null;
-        });
-      }
+      await c.prepareForVideoRecording();
+      await c.startVideoRecording();
+
+      if (!mounted) return;
+      setState(() {
+        _recording = true;
+        _videoFile = null;
+        _recordSeconds = 6;
+      });
+
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+
+        if (_recordSeconds <= 1) {
+          timer.cancel();
+          await _stopAutoRecordAndGoNext();
+        } else {
+          setState(() {
+            _recordSeconds -= 1;
+          });
+        }
+      });
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('녹화 오류: $e')),
+        SnackBar(content: Text('자동 녹화 시작 실패: $e')),
+      );
+    }
+  }
+
+  Future<void> _stopAutoRecordAndGoNext() async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized || !_recording) return;
+
+    try {
+      final file = await c.stopVideoRecording();
+
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _videoFile = file;
+      });
+
+      _goNext();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('자동 녹화 종료 실패: $e')),
       );
     }
   }
@@ -400,7 +461,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
     final path = _videoFile?.path;
     if (path == null || path.isEmpty || !File(path).existsSync()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('먼저 녹화를 완료해 주세요.')),
+        const SnackBar(content: Text('촬영된 영상이 없습니다.')),
       );
       return;
     }
@@ -413,59 +474,154 @@ class _RecordingScreenState extends State<RecordingScreen> {
     final sessionUuid = data?['sessionUuid'] as String?;
     final affectedSide = data?['affectedSide'] as String?;
 
-    context.push('/review', extra: {
+    context.go('/review', extra: {
       'videoPath': path,
       'patientId': patientId,
       'exerciseId': exerciseId,
       'sessionUuid': sessionUuid,
       'affectedSide': affectedSide,
+      'routineExerciseIds': data?['routineExerciseIds'],
+      'routineIndex': data?['routineIndex'],
+      'fromRoutine': data?['fromRoutine'],
     });
+  }
+
+  String _statusText() {
+    if (_initializing) {
+      return '촬영 화면을 준비하고 있습니다.';
+    }
+    if (_recording) {
+      return '지금 동작을 천천히 수행해 주세요. $_recordSeconds초 남았어요.';
+    }
+    if (_prepareSeconds > 0) {
+      return '준비해 주세요. $_prepareSeconds초 후 촬영이 시작됩니다.';
+    }
+    return '영상 확인 중입니다.';
+  }
+
+  String _exerciseName(int id) {
+    switch (id) {
+      case 0:
+        return '팔 앞으로 들기';
+      case 1:
+        return '팔 옆으로 들기';
+      case 2:
+        return '머리 만지기';
+      case 3:
+        return '허리 뒤로 손 가져가기';
+      case 4:
+        return '앞으로 손 뻗기';
+      case 5:
+        return '옆으로 손 뻗기';
+      case 6:
+        return '팔 굽히기';
+      case 7:
+        return '팔 펴기';
+      default:
+        return '운동';
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final c = _controller;
+    final extra = GoRouterState.of(context).extra;
+    final data = (extra is Map) ? extra : null;
+    final exerciseId = (data?['exerciseId'] as int?) ?? 0;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('촬영 화면')),
+      appBar: AppBar(
+        title: const Text('촬영 화면'),
+      ),
       body: _initializing
           ? const Center(child: CircularProgressIndicator())
           : (c == null || !c.value.isInitialized)
           ? const Center(child: Text('카메라를 사용할 수 없습니다.'))
           : Column(
         children: [
-      Expanded(
-      child: _PreviewFrame(
-      aspectRatio: _cameraAspectRatioForScreen(context, c),
-      child: CameraPreview(c),
-      ),
-    ),
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '운동 촬영',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _exerciseName(exerciseId),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _statusText(),
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade700,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                _PreviewFrame(
+                  aspectRatio: _cameraAspectRatioForScreen(context, c),
+                  child: CameraPreview(c),
+                ),
+                if (_prepareSeconds > 0 && !_recording)
+                  Center(
+                    child: Container(
+                      width: 120,
+                      height: 120,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black.withOpacity(0.45),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '$_prepareSeconds',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 44,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           SafeArea(
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: _toggleRecord,
-                        child: Text(_recording ? '녹화 중지' : '녹화 시작'),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: SizedBox(
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: _recording ? null : _goNext,
-                        child: const Text('다음(관찰)'),
-                      ),
-                    ),
-                  ),
-                ],
+              child: SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: OutlinedButton(
+                  onPressed: () {
+                    context.pop();
+                  },
+                  child: const Text('운동 중단하기'),
+                ),
               ),
             ),
           ),
@@ -474,7 +630,6 @@ class _RecordingScreenState extends State<RecordingScreen> {
     );
   }
 }
-
 
 class ReviewScreen extends StatefulWidget {
   const ReviewScreen({super.key});
@@ -486,12 +641,15 @@ class ReviewScreen extends StatefulWidget {
 class _ReviewScreenState extends State<ReviewScreen> {
   VideoPlayerController? _vc;
   bool _loading = true;
-  bool _mirror = true; // 좌우반전 기본 ON
+  bool _mirror = true;
+  bool _navigating = false;
+
+  int _playCount = 0;
+  final int _targetPlayCount = 2;
 
   @override
   void initState() {
     super.initState();
-    // extra는 build에서만 접근 가능해서, 첫 프레임 후에 초기화
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
 
@@ -504,6 +662,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
       if (path == null || path.isEmpty) {
         throw Exception('videoPath가 전달되지 않았습니다.');
       }
+
       final f = File(path);
       if (!f.existsSync()) {
         throw Exception('영상 파일이 존재하지 않습니다: $path');
@@ -511,23 +670,26 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
       final controller = VideoPlayerController.file(f);
 
-      // ✅ 무한 로딩 방지: 10초 타임아웃
       await controller.initialize().timeout(
         const Duration(seconds: 10),
-        onTimeout: () => throw Exception('영상 초기화 시간이 초과되었습니다(10초).'),
+        onTimeout: () => throw Exception('영상 초기화 시간이 초과되었습니다.'),
       );
 
-      await controller.setLooping(true);
-      await controller.play();
+      await controller.setLooping(false);
+      controller.addListener(_handleVideoProgress);
 
       if (!mounted) return;
       setState(() {
         _vc = controller;
         _loading = false;
       });
+
+      await VoiceGuide.speak(
+        '화면의 동작을 잘 관찰해 주세요. 이 영상은 건강한 쪽 움직임을 좌우반전한 모습입니다.',
+      );
+
+      await controller.play();
     } catch (e) {
-      // ✅ 어떤 경우든 로딩 종료 + 원인 표시
-      debugPrint('ReviewScreen init error: $e');
       if (!mounted) return;
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -536,8 +698,61 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
   }
 
+  void _handleVideoProgress() async {
+    final vc = _vc;
+    if (vc == null || !vc.value.isInitialized || _navigating) return;
+
+    final position = vc.value.position;
+    final duration = vc.value.duration;
+    if (duration.inMilliseconds <= 0) return;
+
+    final ended = position.inMilliseconds >= duration.inMilliseconds - 150;
+    if (!ended) return;
+
+    if (_playCount < _targetPlayCount - 1) {
+      _playCount += 1;
+      await vc.seekTo(Duration.zero);
+      await vc.play();
+      if (mounted) setState(() {});
+      return;
+    }
+
+    _goImitate();
+  }
+
+  void _goImitate() async {
+    if (_navigating) return;
+    _navigating = true;
+
+    await VoiceGuide.speak('이제 따라하기를 시작합니다.');
+
+    final extra = GoRouterState.of(context).extra;
+    final data = (extra is Map) ? extra : null;
+
+    final path = data?['videoPath'] as String?;
+    final patientId = data?['patientId'] as int?;
+    final affectedSide = data?['affectedSide'] as String?;
+    final exerciseId = data?['exerciseId'] as int?;
+    final sessionUuid = data?['sessionUuid'] as String?;
+
+    if (path == null) return;
+
+    context.go('/imitate', extra: {
+      'videoPath': path,
+      'patientId': patientId,
+      'exerciseId': exerciseId,
+      'sessionUuid': sessionUuid,
+      'affectedSide': affectedSide,
+      'routineExerciseIds': data?['routineExerciseIds'],
+      'routineIndex': data?['routineIndex'],
+      'fromRoutine': data?['fromRoutine'],
+    });
+  }
+
   @override
   void dispose() {
+    _vc?.removeListener(_handleVideoProgress);
+    VoiceGuide.stop();
     _vc?.dispose();
     super.dispose();
   }
@@ -548,7 +763,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('관찰 화면'),
+        title: const Text('관찰하기'),
         actions: [
           Row(
             children: [
@@ -559,62 +774,74 @@ class _ReviewScreenState extends State<ReviewScreen> {
               ),
               const SizedBox(width: 8),
             ],
-          )
+          ),
         ],
       ),
-
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : (vc == null || !vc.value.isInitialized)
           ? const Center(child: Text('영상을 불러오지 못했습니다.'))
-          : _PreviewFrame(
-        aspectRatio: vc.value.aspectRatio,
-        child: Transform.flip(
-          flipX: _mirror,
-          child: VideoPlayer(vc),
+          : SafeArea(
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '관찰하기',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '화면의 동작을 잘 관찰해 주세요.\n영상은 2번 반복 재생된 후 자동으로 따라하기로 넘어갑니다.',
+                    style: TextStyle(fontSize: 14, height: 1.5),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '재생 ${_playCount + 1} / $_targetPlayCount',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: vc.value.aspectRatio,
+                  child: Transform.flip(
+                    flipX: _mirror,
+                    child: VideoPlayer(vc),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
-
-      floatingActionButton: (vc == null)
-          ? null
-          : FloatingActionButton(
-        onPressed: () {
-          setState(() {
-            vc.value.isPlaying ? vc.pause() : vc.play();
-          });
-        },
-        child: Icon(
-          vc.value.isPlaying ? Icons.pause : Icons.play_arrow,
-        ),
-      ),
-
       bottomNavigationBar: SafeArea(
+        top: false,
         child: Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
           child: SizedBox(
             width: double.infinity,
+            height: 52,
             child: ElevatedButton(
-              onPressed: () {
-                final extra = GoRouterState.of(context).extra;
-                final data = (extra is Map) ? extra : null;
-
-                final path = data?['videoPath'] as String?;
-                final patientId = data?['patientId'] as int?;
-                final affectedSide = data?['affectedSide'] as String?;
-
-                if (path == null) return;
-
-                final exerciseId = data?['exerciseId'] as int?;
-                final sessionUuid = data?['sessionUuid'] as String?;
-                context.push('/imitate', extra: {
-                  'videoPath': path,
-                  'patientId': patientId,
-                  'exerciseId': exerciseId,
-                  'sessionUuid': sessionUuid,
-                  'affectedSide': affectedSide,
-                });
-              },
-              child: const Text('따라하기(2분할)로'),
+              onPressed: _goImitate,
+              child: const Text('바로 따라하기'),
             ),
           ),
         ),
@@ -622,7 +849,8 @@ class _ReviewScreenState extends State<ReviewScreen> {
     );
   }
 }
-  class ImitationScreen extends StatefulWidget {
+
+class ImitationScreen extends StatefulWidget {
   const ImitationScreen({super.key});
 
   @override
@@ -634,18 +862,28 @@ class _ImitationScreenState extends State<ImitationScreen> {
   CameraController? _cc;
 
   bool _loading = true;
-  bool _mirror = true;
   bool _recording = false;
+  bool _autoFlowStarted = false;
+
   XFile? _patientVideo;
 
+  int _prepareSeconds = 3;
+  int _recordSeconds = 6;
+
+  Timer? _prepareTimer;
+  Timer? _recordTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
+
   @override
   void dispose() {
+    _prepareTimer?.cancel();
+    _recordTimer?.cancel();
+    VoiceGuide.stop();
     _vc?.dispose();
     _cc?.dispose();
     super.dispose();
@@ -657,6 +895,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
 
     final path = data?['videoPath'] as String?;
     if (path == null || path.isEmpty || !File(path).existsSync()) {
+      if (!mounted) return;
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('영상 경로가 없습니다.')),
@@ -665,18 +904,20 @@ class _ImitationScreenState extends State<ImitationScreen> {
     }
 
     try {
-      // 1) 비디오
       final vc = VideoPlayerController.file(File(path));
       await vc.initialize();
       await vc.setLooping(true);
-      await vc.play();
 
-      // 2) 카메라(전면)
       final cameras = await availableCameras();
-      final front = cameras.where((c) => c.lensDirection == CameraLensDirection.front);
+      final front =
+      cameras.where((c) => c.lensDirection == CameraLensDirection.front);
       final selected = front.isNotEmpty ? front.first : cameras.first;
 
-      final cc = CameraController(selected, ResolutionPreset.medium, enableAudio: false);
+      final cc = CameraController(
+        selected,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
       await cc.initialize();
 
       if (!mounted) return;
@@ -685,6 +926,8 @@ class _ImitationScreenState extends State<ImitationScreen> {
         _cc = cc;
         _loading = false;
       });
+
+      _startAutoFlow();
     } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
@@ -693,39 +936,97 @@ class _ImitationScreenState extends State<ImitationScreen> {
       );
     }
   }
-  Future<void> _togglePatientRecord() async {
+
+  void _startAutoFlow() async {
+    if (_autoFlowStarted) return;
+    _autoFlowStarted = true;
+
+    await VoiceGuide.speak(
+      '작은 예시 영상을 참고하면서 환측으로 천천히 따라해 주세요. 준비해 주세요.',
+    );
+
+    _prepareSeconds = 3;
+    _prepareTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_prepareSeconds <= 1) {
+        timer.cancel();
+        setState(() => _prepareSeconds = 0);
+        await VoiceGuide.speak('지금 따라해 주세요.');
+        await _startAutoImitation();
+      } else {
+        setState(() => _prepareSeconds -= 1);
+      }
+    });
+  }
+
+  Future<void> _startAutoImitation() async {
+    final vc = _vc;
     final cc = _cc;
-    if (cc == null || !cc.value.isInitialized) return;
+    if (vc == null || cc == null) return;
+    if (!vc.value.isInitialized || !cc.value.isInitialized) return;
 
     try {
-      if (_recording) {
-        final file = await cc.stopVideoRecording();
-        if (!mounted) return;
-        setState(() {
-          _recording = false;
-          _patientVideo = file;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('환자 영상 저장됨: ${file.path}')),
-        );
-      } else {
-        await cc.prepareForVideoRecording();
-        await cc.startVideoRecording();
-        if (!mounted) return;
-        setState(() {
-          _recording = true;
-          _patientVideo = null;
-        });
-      }
+      await vc.seekTo(Duration.zero);
+      await vc.play();
+
+      await cc.prepareForVideoRecording();
+      await cc.startVideoRecording();
+
+      if (!mounted) return;
+      setState(() {
+        _recording = true;
+        _recordSeconds = 6;
+        _patientVideo = null;
+      });
+
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+
+        if (_recordSeconds <= 1) {
+          timer.cancel();
+          await _stopAutoImitationAndGoFeedback();
+        } else {
+          setState(() => _recordSeconds -= 1);
+        }
+      });
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('환자 녹화 오류: $e')),
+        SnackBar(content: Text('자동 따라하기 시작 실패: $e')),
       );
     }
   }
 
-  void _goFeedback() {
+  Future<void> _stopAutoImitationAndGoFeedback() async {
+    final cc = _cc;
+    if (cc == null || !cc.value.isInitialized || !_recording) return;
+
+    try {
+      final file = await cc.stopVideoRecording();
+
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _patientVideo = file;
+      });
+
+      _goFeedback();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('자동 따라하기 종료 실패: $e')),
+      );
+    }
+  }
+
+  void _goFeedback() async {
     final extra = GoRouterState.of(context).extra;
     final data = (extra is Map) ? extra : null;
 
@@ -739,26 +1040,38 @@ class _ImitationScreenState extends State<ImitationScreen> {
 
     if (modelPath == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('모델 영상 없음')),
+        const SnackBar(content: Text('모델 영상이 없습니다.')),
       );
       return;
     }
 
     if (patientPath == null || !File(patientPath).existsSync()) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('환자 녹화 필요')),
+        const SnackBar(content: Text('환자 영상이 없습니다.')),
       );
       return;
     }
 
-    context.push('/feedback', extra: {
+    await VoiceGuide.speak('잘하셨습니다. 결과를 확인합니다.');
+
+    context.go('/feedback', extra: {
       'patientId': patientId,
       'exerciseId': exerciseId,
       'sessionUuid': sessionUuid,
       'affectedSide': affectedSide,
       'modelPath': modelPath,
       'patientPath': patientPath,
+      'routineExerciseIds': data?['routineExerciseIds'],
+      'routineIndex': data?['routineIndex'],
+      'fromRoutine': data?['fromRoutine'],
     });
+  }
+
+  String _statusText() {
+    if (_loading) return '따라하기 화면을 준비하고 있습니다.';
+    if (_recording) return '지금 환측으로 동작을 따라해 주세요. $_recordSeconds초 남았어요.';
+    if (_prepareSeconds > 0) return '준비해 주세요. $_prepareSeconds초 후 시작합니다.';
+    return '영상 확인 중입니다.';
   }
 
   @override
@@ -768,82 +1081,128 @@ class _ImitationScreenState extends State<ImitationScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('따라하기(2분할)'),
-        actions: [
-          Row(
-            children: [
-              const Text('영상 반전'),
-              Switch(value: _mirror, onChanged: (v) => setState(() => _mirror = v)),
-              const SizedBox(width: 8),
-            ],
-          )
-        ],
+        title: const Text('따라하기'),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : (vc == null || cc == null)
           ? const Center(child: Text('화면을 불러오지 못했습니다.'))
-          : Builder(
-        builder: (context) {
-          final orientation = MediaQuery.of(context).orientation;
-
-          final modelView = _PreviewFrame(
-            aspectRatio: vc.value.aspectRatio,
-            child: Transform.flip(
-              flipX: _mirror,
-              child: VideoPlayer(vc),
-            ),
-          );
-
-          final patientView = _PreviewFrame(
-            aspectRatio: _cameraAspectRatioForScreen(context, cc),
-            child: CameraPreview(cc),
-          );
-
-          if (orientation == Orientation.portrait) {
-            return Column(
-              children: [
-                Expanded(child: modelView),
-                const Divider(height: 1, thickness: 1),
-                Expanded(child: patientView),
-              ],
-            );
-          } else {
-            return Row(
-              children: [
-                Expanded(child: modelView),
-                const VerticalDivider(width: 1, thickness: 1),
-                Expanded(child: patientView),
-              ],
-            );
-          }
-        },
-      ),
-
-    bottomNavigationBar: SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
+          : SafeArea(
+        child: Column(
           children: [
-            Expanded(
-              child: ElevatedButton(
-                onPressed: _togglePatientRecord,
-                child: Text(_recording ? '환자 녹화 중지' : '환자 녹화 시작'),
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '따라하기',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '작은 예시 영상을 참고하면서 환측으로 천천히 따라해 주세요.',
+                    style: TextStyle(fontSize: 14, height: 1.5),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    _statusText(),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 12),
             Expanded(
-              child: ElevatedButton(
-                onPressed: _recording ? null : _goFeedback,
-                child: const Text('피드백으로'),
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: _PreviewFrame(
+                      aspectRatio: _cameraAspectRatioForScreen(context, cc),
+                      child: CameraPreview(cc),
+                    ),
+                  ),
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: Container(
+                      width: 140,
+                      height: 220,
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.white70),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.18),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(14),
+                        child: AspectRatio(
+                          aspectRatio: vc.value.aspectRatio,
+                          child: VideoPlayer(vc),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_prepareSeconds > 0 && !_recording)
+                    Center(
+                      child: Container(
+                        width: 120,
+                        height: 120,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.black.withOpacity(0.45),
+                        ),
+                        child: Center(
+                          child: Text(
+                            '$_prepareSeconds',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 44,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],
         ),
       ),
-    ),
-  );
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+          child: SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: OutlinedButton(
+              onPressed: () {
+                context.pop();
+              },
+              child: const Text('운동 중단하기'),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
-}
-
-

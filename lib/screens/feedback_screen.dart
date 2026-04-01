@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -9,6 +8,7 @@ import 'package:isar/isar.dart';
 
 import '../models/session_log.dart';
 import '../storage/isar_db.dart';
+import '../utils/voice_guide.dart';
 
 String _serverBaseUrl() {
   return 'http://192.168.10.107:5000';
@@ -48,13 +48,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Map<String, dynamic> _features = <String, dynamic>{};
 
   Timer? _autoTimer;
-  int _secondsLeft = 5;
-
-  bool _isScreening = false;
-  int _screeningIndex = 0;
-  int _screeningTotal = 0;
-
-  final List<int> _screeningExerciseIds = const [0, 1, 2, 3, 4, 5, 6, 7];
+  int _secondsLeft = 3;
 
   @override
   void initState() {
@@ -65,6 +59,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   @override
   void dispose() {
     _autoTimer?.cancel();
+    VoiceGuide.stop();
     super.dispose();
   }
 
@@ -226,18 +221,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     }
   }
 
-  bool get _isLastScreeningItem {
-    if (!_isScreening) return false;
-    return _screeningIndex >= _screeningTotal - 1;
-  }
-
-  int? _nextScreeningExerciseId() {
-    if (_isLastScreeningItem) return null;
-    final nextIndex = _screeningIndex + 1;
-    if (nextIndex < 0 || nextIndex >= _screeningExerciseIds.length) return null;
-    return _screeningExerciseIds[nextIndex];
-  }
-
   bool get _hasRoutine => _fromRoutine && _routineExerciseIds.isNotEmpty;
 
   bool get _isLastRoutineItem {
@@ -252,7 +235,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   void _startAutoNext() {
     _autoTimer?.cancel();
-    _secondsLeft = 5;
+    _secondsLeft = 3;
 
     _autoTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -262,9 +245,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       if (_secondsLeft <= 1) {
         timer.cancel();
-        if (_isScreening) {
-          _goNextScreeningStep();
-        } else if (_hasRoutine) {
+        if (_hasRoutine) {
           _goNextRoutineStep();
         } else {
           _goRecommendedExercise();
@@ -280,7 +261,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   void _goRecommendedExercise() {
     _autoTimer?.cancel();
 
-    context.push('/record', extra: {
+    context.go('/record', extra: {
       'patientId': _patientId,
       'exerciseId': _recommendedExerciseId(),
       'sessionUuid': DateTime.now().microsecondsSinceEpoch.toString(),
@@ -292,26 +273,26 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     _autoTimer?.cancel();
 
     if (_isLastRoutineItem) {
-      context.push('/results', extra: {
+      context.go('/results', extra: {
         'patientId': _patientId,
-        'affectedSide': _affectedSide,
+        'sessionUuid': _sessionUuid,
       });
       return;
     }
 
     final nextExerciseId = _nextRoutineExerciseId();
     if (nextExerciseId == null) {
-      context.push('/results', extra: {
+      context.go('/results', extra: {
         'patientId': _patientId,
-        'affectedSide': _affectedSide,
+        'sessionUuid': _sessionUuid,
       });
       return;
     }
 
-    context.push('/record', extra: {
+    context.go('/record', extra: {
       'patientId': _patientId,
       'exerciseId': nextExerciseId,
-      'sessionUuid': DateTime.now().microsecondsSinceEpoch.toString(),
+      'sessionUuid': _sessionUuid,
       'affectedSide': _affectedSide,
       'routineExerciseIds': _routineExerciseIds,
       'routineIndex': _routineIndex + 1,
@@ -319,36 +300,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     });
   }
 
-  void _goNextScreeningStep() {
+  void _retryCurrentExercise() {
     _autoTimer?.cancel();
 
-    if (_isLastScreeningItem) {
-      context.go('/exercise', extra: {
-        'patientId': _patientId,
-        'affectedSide': _affectedSide,
-        'fromScreening': true,
-      });
-      return;
-    }
-
-    final nextExerciseId = _nextScreeningExerciseId();
-    if (nextExerciseId == null) {
-      context.go('/exercise', extra: {
-        'patientId': _patientId,
-        'affectedSide': _affectedSide,
-        'fromScreening': true,
-      });
-      return;
-    }
-
-    context.push('/record', extra: {
+    context.go('/record', extra: {
       'patientId': _patientId,
-      'exerciseId': nextExerciseId,
-      'sessionUuid': 'screening_${DateTime.now().microsecondsSinceEpoch}',
+      'exerciseId': _exerciseId,
+      'sessionUuid': _sessionUuid,
       'affectedSide': _affectedSide,
-      'isScreening': true,
-      'screeningIndex': _screeningIndex + 1,
-      'screeningTotal': _screeningTotal,
+      'routineExerciseIds': _routineExerciseIds,
+      'routineIndex': _routineIndex,
+      'fromRoutine': _fromRoutine,
     });
   }
 
@@ -358,11 +320,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       final data = (extra is Map) ? extra : null;
 
       _affectedSide = (data?['affectedSide'] as String?) ?? 'L';
-
-      _isScreening = (data?['isScreening'] as bool?) ?? false;
-      _screeningIndex = (data?['screeningIndex'] as int?) ?? 0;
-      _screeningTotal =
-          (data?['screeningTotal'] as int?) ?? _screeningExerciseIds.length;
 
       _fromRoutine = (data?['fromRoutine'] as bool?) ?? false;
       final rawRoutineIds = data?['routineExerciseIds'];
@@ -380,8 +337,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       final incomingSessionUuid = data?['sessionUuid'] as String?;
 
       if (patientId == null) throw Exception('patientId가 없습니다.');
-      if (modelPath == null || modelPath.isEmpty) throw Exception('modelPath가 없습니다.');
-      if (patientPath == null || patientPath.isEmpty) throw Exception('patientPath가 없습니다.');
+      if (modelPath == null || modelPath.isEmpty) {
+        throw Exception('modelPath가 없습니다.');
+      }
+      if (patientPath == null || patientPath.isEmpty) {
+        throw Exception('patientPath가 없습니다.');
+      }
 
       _patientId = patientId;
       _exerciseId = exerciseId;
@@ -420,7 +381,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _features = result.features;
 
       final existingRefs = allLogs
-          .where((log) => log.sessionUuid == sessionUuid && log.isReference == true)
+          .where((log) => log.sessionUuid == sessionUuid && log.isReference)
           .toList();
 
       final refExists = existingRefs.isNotEmpty;
@@ -473,7 +434,17 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       if (!mounted) return;
       setState(() => _saving = false);
 
-      if (!(result.quality['needsRetake'] == true)) {
+      if (result.quality['needsRetake'] == true) {
+        await VoiceGuide.speak('다시 한 번 촬영해 주세요.');
+      } else if (_hasRoutine) {
+        if (_isLastRoutineItem) {
+          await VoiceGuide.speak('잘하셨습니다. 오늘의 운동이 완료되었습니다.');
+        } else {
+          await VoiceGuide.speak('잘하셨습니다. 다음 운동으로 넘어갑니다.');
+        }
+        _startAutoNext();
+      } else {
+        await VoiceGuide.speak('잘하셨습니다. 다음 추천 운동으로 넘어갑니다.');
         _startAutoNext();
       }
     } catch (e) {
@@ -552,12 +523,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   @override
   Widget build(BuildContext context) {
     final needsRetake = _quality['needsRetake'] == true;
-    final nextScreeningExerciseId = _nextScreeningExerciseId();
     final nextRoutineExerciseId = _nextRoutineExerciseId();
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isScreening ? '평가 결과' : '피드백'),
+        title: const Text('운동 결과'),
       ),
       body: SafeArea(
         child: _saving
@@ -611,7 +581,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     const SizedBox(height: 10),
                     Text(
                       _scoreComment(),
-                      style: const TextStyle(fontSize: 15, height: 1.4),
+                      style: const TextStyle(
+                        fontSize: 15,
+                        height: 1.4,
+                      ),
                     ),
                   ],
                 ),
@@ -658,8 +631,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-
-              if (!needsRetake && !_isScreening && _hasRoutine) ...[
+              if (!needsRetake && _hasRoutine) ...[
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
@@ -671,7 +643,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        _isLastRoutineItem ? '오늘의 루틴 완료' : '다음 루틴 운동',
+                        _isLastRoutineItem ? '오늘의 운동 완료' : '다음 운동',
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
@@ -720,15 +692,15 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   child: OutlinedButton(
                     onPressed: () {
                       _autoTimer?.cancel();
-                      context.push('/results', extra: {
+                      context.go('/results', extra: {
                         'patientId': _patientId,
-                        'affectedSide': _affectedSide,
+                        'sessionUuid': _sessionUuid,
                       });
                     },
-                    child: const Text('오늘 루틴 종료'),
+                    child: const Text('오늘 운동 종료'),
                   ),
                 ),
-              ] else if (!needsRetake && !_isScreening) ...[
+              ] else if (!needsRetake) ...[
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
@@ -757,7 +729,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                       const SizedBox(height: 6),
                       Text(
                         _recommendedReason(),
-                        style: const TextStyle(fontSize: 14, height: 1.4),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          height: 1.4,
+                        ),
                       ),
                       const SizedBox(height: 10),
                       Text(
@@ -789,7 +764,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   child: OutlinedButton(
                     onPressed: () {
                       _autoTimer?.cancel();
-                      context.push('/exercise', extra: {
+                      context.go('/exercise', extra: {
                         'patientId': _patientId,
                         'affectedSide': _affectedSide,
                       });
@@ -804,91 +779,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   child: TextButton(
                     onPressed: () {
                       _autoTimer?.cancel();
-                      context.push('/results', extra: {
+                      context.go('/results', extra: {
                         'patientId': _patientId,
-                        'affectedSide': _affectedSide,
+                        'sessionUuid': _sessionUuid,
                       });
                     },
                     child: const Text('오늘은 여기까지'),
-                  ),
-                ),
-              ] else if (!needsRetake && _isScreening) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.purple.shade50,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _isLastScreeningItem ? '평가 완료' : '다음 평가 동작',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _isLastScreeningItem
-                            ? '모든 평가 동작이 끝났어요.'
-                            : _exerciseName(nextScreeningExerciseId ?? 0),
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _isLastScreeningItem
-                            ? '현재 상태 평가가 완료되어 운동 선택 화면으로 돌아갑니다.'
-                            : '현재 상태 평가를 계속 진행합니다.',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          height: 1.4,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        '$_secondsLeft초 후 자동으로 진행합니다.',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.blue,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: _goNextScreeningStep,
-                    child: Text(
-                      _isLastScreeningItem
-                          ? '평가 완료'
-                          : '${_exerciseName(nextScreeningExerciseId ?? 0)} 진행',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      _autoTimer?.cancel();
-                      context.go('/exercise', extra: {
-                        'patientId': _patientId,
-                        'affectedSide': _affectedSide,
-                        'fromScreening': true,
-                      });
-                    },
-                    child: const Text('평가 종료하고 운동 선택으로'),
                   ),
                 ),
               ] else ...[
@@ -896,10 +792,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   width: double.infinity,
                   height: 52,
                   child: ElevatedButton(
-                    onPressed: () {
-                      _autoTimer?.cancel();
-                      context.pop();
-                    },
+                    onPressed: _retryCurrentExercise,
                     child: const Text('다시 촬영하기'),
                   ),
                 ),

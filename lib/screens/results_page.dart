@@ -1,14 +1,10 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:isar/isar.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../exercises/exercise_definitions.dart';
 import '../models/session_log.dart';
 import '../storage/isar_db.dart';
+import 'package:isar/isar.dart';
 
 class ResultsPage extends StatefulWidget {
   const ResultsPage({super.key});
@@ -22,14 +18,13 @@ class _ResultsPageState extends State<ResultsPage> {
   String? error;
 
   int patientId = -1;
+  String sessionUuid = '';
 
-  int todayCount = 0;
-  int todayBest = 0;
-  double todayAvg = 0;
+  List<SessionLog> todayLogs = [];
 
-  final Map<int, _ExerciseSummary> byExercise = {
-    for (var i = 0; i < 8; i++) i: _ExerciseSummary(),
-  };
+  int totalExercises = 0;
+  int bestScore = 0;
+  double avgScore = 0.0;
 
   @override
   void initState() {
@@ -46,49 +41,49 @@ class _ResultsPageState extends State<ResultsPage> {
     try {
       final extra = GoRouterState.of(context).extra;
       final data = (extra is Map) ? extra : null;
-      patientId = (data?['patientId'] as int?) ?? -1;
-      if (patientId < 0) throw Exception('patientId가 없습니다.');
 
-      final todayKey = _dateKey(DateTime.now());
+      patientId = (data?['patientId'] as int?) ?? -1;
+      sessionUuid = (data?['sessionUuid'] as String?) ?? '';
+
+      if (patientId < 0) {
+        throw Exception('patientId가 없습니다.');
+      }
+      if (sessionUuid.isEmpty) {
+        throw Exception('sessionUuid가 없습니다.');
+      }
+
       final isar = IsarDB.instance;
 
-      final List<SessionLog> logs = await isar.sessionLogs
+      final allLogs = await isar.sessionLogs.where().anyId().findAll();
+
+      final logs = await isar.sessionLogs
           .filter()
           .patientIdEqualTo(patientId)
-          .dateKeyEqualTo(todayKey)
+          .sessionUuidEqualTo(sessionUuid)
           .isReferenceEqualTo(false)
           .findAll();
 
-      logs.sort((a, b) => b.timestampKst.compareTo(a.timestampKst));
+      logs.sort((a, b) => a.timestampKst.compareTo(b.timestampKst));
 
-      todayCount = logs.length;
-      if (todayCount == 0) {
-        todayBest = 0;
-        todayAvg = 0;
+      todayLogs = logs;
+      totalExercises = logs.length;
+
+      if (logs.isEmpty) {
+        bestScore = 0;
+        avgScore = 0.0;
       } else {
         int sum = 0;
         int best = 0;
+
         for (final l in logs) {
-          sum += l.overall.toInt();
-          if (l.overall > best) best = l.overall;
+          sum = sum + l.overall;
+          if (l.overall > best) {
+            best = l.overall;
+          }
         }
-        todayBest = best;
-        todayAvg = sum / todayCount;
-      }
 
-      for (var i = 0; i < 8; i++) {
-        byExercise[i] = _ExerciseSummary();
-      }
-
-      for (final l in logs) {
-        final ex = l.exerciseId;
-        final s = byExercise[ex] ?? _ExerciseSummary();
-
-        s.count += 1;
-        s.sumOverall += l.overall.toInt();
-        if (l.overall > s.bestOverall) s.bestOverall = l.overall;
-
-        byExercise[ex] = s;
+        bestScore = best;
+        avgScore = sum / logs.length;
       }
 
       if (!mounted) return;
@@ -102,84 +97,47 @@ class _ResultsPageState extends State<ResultsPage> {
     }
   }
 
-  String _dateKey(DateTime dt) {
-    final y = dt.year.toString().padLeft(4, '0');
-    final m = dt.month.toString().padLeft(2, '0');
-    final d = dt.day.toString().padLeft(2, '0');
-    return '$y-$m-$d';
+  String _exerciseName(int id) {
+    final ex = Exercises.byId(id);
+    return ex.name;
   }
 
-  String _exerciseName(int id) => Exercises.byId(id).name;
-
-  String _scoreComment(double score) {
-    if (score >= 80) return '좋아요';
-    if (score >= 60) return '잘하고 있어요';
-    if (score >= 40) return '조금 더 연습해볼까요';
-    return '천천히 다시 해봐요';
+  String _overallComment(double score) {
+    if (score >= 85) return '아주 좋아요. 오늘의 운동을 정말 잘 마쳤어요.';
+    if (score >= 70) return '좋아요. 꾸준히 하면 더 좋아질 수 있어요.';
+    if (score >= 50) return '잘하고 있어요. 천천히 정확하게 반복해보세요.';
+    return '괜찮아요. 무리하지 말고 천천히 다시 연습해보세요.';
   }
 
-  Future<void> _exportCsv() async {
-    try {
-      final isar = IsarDB.instance;
-      final logs = await isar.sessionLogs.where().findAll();
+  String _exerciseComment(int score) {
+    if (score >= 85) return '매우 좋음';
+    if (score >= 70) return '좋음';
+    if (score >= 50) return '보통';
+    return '조금 더 연습해봐요';
+  }
 
-      if (logs.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('내보낼 데이터가 없습니다')),
-        );
-        return;
-      }
+  SessionLog? get _bestLog {
+    if (todayLogs.isEmpty) return null;
+    final sorted = [...todayLogs]..sort((a, b) => b.overall.compareTo(a.overall));
+    return sorted.first;
+  }
 
-      final buffer = StringBuffer();
-      buffer.writeln(
-        'patientId,exerciseId,timestampKst,dateKey,overall,symmetry,timing,smoothness,compensation,rom,sessionUuid,appVersion,scoreSchemaVersion',
-      );
-
-      for (final l in logs) {
-        buffer.writeln(
-          '${l.patientId},${l.exerciseId},${l.timestampKst.toIso8601String()},${l.dateKey},${l.overall},${l.symmetry},${l.timing},${l.smoothness},${l.compensation},${l.rom},${l.sessionUuid},${l.appVersion},${l.scoreSchemaVersion}',
-        );
-      }
-
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/rehab_export.csv');
-      await file.writeAsString(buffer.toString(), flush: true);
-
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        text: '재활 훈련 데이터 CSV',
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('내보내기 실패: $e')),
-      );
-    }
+  SessionLog? get _lowestLog {
+    if (todayLogs.isEmpty) return null;
+    final sorted = [...todayLogs]..sort((a, b) => a.overall.compareTo(b.overall));
+    return sorted.first;
   }
 
   @override
   Widget build(BuildContext context) {
-    final todayKey = _dateKey(DateTime.now());
     final extra = GoRouterState.of(context).extra;
     final data = (extra is Map) ? extra : null;
     final patientIdFromRoute = data?['patientId'] as int?;
-    final showBottomButton = !loading && error == null && patientIdFromRoute != null;
-
-    final performedExercises = byExercise.entries
-        .where((e) => e.value.count > 0)
-        .toList()
-      ..sort((a, b) => b.value.bestOverall.compareTo(a.value.bestOverall));
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('훈련 결과'),
+        title: const Text('오늘의 운동 결과'),
         actions: [
-          IconButton(
-            tooltip: '내보내기',
-            onPressed: _exportCsv,
-            icon: const Icon(Icons.upload_file),
-          ),
           IconButton(
             tooltip: '새로고침',
             onPressed: loading ? null : _load,
@@ -190,84 +148,131 @@ class _ResultsPageState extends State<ResultsPage> {
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : (error != null)
-          ? Center(child: Text('오류: $error'))
-          : Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '오늘의 운동 결과',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              todayKey,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Colors.grey[700],
+          ? Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            '오류: $error',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      )
+          : todayLogs.isEmpty
+          ? const Center(
+        child: Text('오늘의 운동 결과를 찾을 수 없습니다.'),
+      )
+          : SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '오늘의 운동 완료',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            _SummaryCard(
-              count: todayCount,
-              best: todayBest,
-              avg: todayAvg,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              _scoreComment(todayAvg),
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
+              const SizedBox(height: 6),
+              Text(
+                '$totalExercises가지 운동을 마쳤어요.',
+                style: Theme.of(context).textTheme.titleMedium,
               ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '오늘 한 운동',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: performedExercises.isEmpty
-                  ? const Center(
-                child: Text('아직 수행한 운동이 없습니다.'),
-              )
-                  : ListView.separated(
-                itemCount: performedExercises.length,
-                separatorBuilder: (_, __) =>
-                const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final entry = performedExercises[index];
-                  final exerciseId = entry.key;
-                  final s = entry.value;
-                  final double avg = s.count == 0 ? 0.0 : s.sumOverall / s.count;
+              const SizedBox(height: 16),
 
-                  return _ExerciseResultCard(
-                    title: _exerciseName(exerciseId),
-                    count: s.count,
-                    best: s.bestOverall,
-                    avg: avg,
-                  );
-                },
+              _TodaySummaryCard(
+                totalExercises: totalExercises,
+                avgScore: avgScore,
+                bestScore: bestScore,
               ),
-            ),
-          ],
+
+              const SizedBox(height: 16),
+
+              Text(
+                _overallComment(avgScore),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              Text(
+                '운동별 결과',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              Expanded(
+                child: ListView.separated(
+                  itemCount: todayLogs.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, index) {
+                    final log = todayLogs[index];
+                    return _ExerciseResultCard(
+                      index: index + 1,
+                      title: _exerciseName(log.exerciseId),
+                      score: log.overall.toInt(),
+                      symmetry: log.symmetry.toInt(),
+                      timing: log.timing.toInt(),
+                      smoothness: log.smoothness.toInt(),
+                      compensation: log.compensation.toInt(),
+                      rom: log.rom.toInt(),
+                      comment: _exerciseComment(log.overall),
+                    );
+                  },
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              if (_bestLog != null && _lowestLog != null)
+                _InsightCard(
+                  bestTitle: _exerciseName(_bestLog!.exerciseId),
+                  bestScore: _bestLog!.overall,
+                  needTitle: _exerciseName(_lowestLog!.exerciseId),
+                  needScore: _lowestLog!.overall,
+                ),
+            ],
+          ),
         ),
       ),
-      bottomNavigationBar: showBottomButton
+      bottomNavigationBar: (patientIdFromRoute != null && !loading && error == null)
           ? SafeArea(
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton(
-              onPressed: () => context.push(
-                '/exercise',
-                extra: {'patientId': patientIdFromRoute},
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: () {
+                    context.go('/exercise', extra: {
+                      'patientId': patientIdFromRoute,
+                    });
+                  },
+                  child: const Text('다시 운동하기'),
+                ),
               ),
-              child: const Text('다시 운동하기'),
-            ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: OutlinedButton(
+                  onPressed: () {
+                    context.go('/', extra: {
+                      'patientId': patientIdFromRoute,
+                    });
+                  },
+                  child: const Text('처음 화면으로'),
+                ),
+              ),
+            ],
           ),
         ),
       )
@@ -276,21 +281,15 @@ class _ResultsPageState extends State<ResultsPage> {
   }
 }
 
-class _ExerciseSummary {
-  int count = 0;
-  int sumOverall = 0;
-  int bestOverall = 0;
-}
+class _TodaySummaryCard extends StatelessWidget {
+  final int totalExercises;
+  final double avgScore;
+  final int bestScore;
 
-class _SummaryCard extends StatelessWidget {
-  final int count;
-  final int best;
-  final double avg;
-
-  const _SummaryCard({
-    required this.count,
-    required this.best,
-    required this.avg,
+  const _TodaySummaryCard({
+    required this.totalExercises,
+    required this.avgScore,
+    required this.bestScore,
   });
 
   @override
@@ -298,25 +297,25 @@ class _SummaryCard extends StatelessWidget {
     return Card(
       elevation: 1,
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
         child: Row(
           children: [
             Expanded(
               child: _SummaryItem(
-                label: '총 횟수',
-                value: '$count',
-              ),
-            ),
-            Expanded(
-              child: _SummaryItem(
-                label: '최고 점수',
-                value: '$best점',
+                label: '운동 수',
+                value: '$totalExercises개',
               ),
             ),
             Expanded(
               child: _SummaryItem(
                 label: '평균 점수',
-                value: '${avg.toStringAsFixed(1)}점',
+                value: '${avgScore.toStringAsFixed(1)}점',
+              ),
+            ),
+            Expanded(
+              child: _SummaryItem(
+                label: '최고 점수',
+                value: '$bestScore점',
               ),
             ),
           ],
@@ -358,40 +357,117 @@ class _SummaryItem extends StatelessWidget {
 }
 
 class _ExerciseResultCard extends StatelessWidget {
+  final int index;
   final String title;
-  final int count;
-  final int best;
-  final double avg;
+  final int score;
+  final int symmetry;
+  final int timing;
+  final int smoothness;
+  final int compensation;
+  final int rom;
+  final String comment;
 
   const _ExerciseResultCard({
+    required this.index,
     required this.title,
-    required this.count,
-    required this.best,
-    required this.avg,
+    required this.score,
+    required this.symmetry,
+    required this.timing,
+    required this.smoothness,
+    required this.compensation,
+    required this.rom,
+    required this.comment,
   });
-
-  String _shortComment(double avg) {
-    if (avg >= 80) return '좋아요';
-    if (avg >= 60) return '잘하고 있어요';
-    if (avg >= 40) return '조금 더 연습해보세요';
-    return '천천히 다시 해보세요';
-  }
 
   @override
   Widget build(BuildContext context) {
     return Card(
       elevation: 1,
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        title: Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.w600),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$index. $title',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '총점: $score점 · $comment',
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _ScoreChip(label: '대칭성', value: symmetry),
+                _ScoreChip(label: '타이밍', value: timing),
+                _ScoreChip(label: '부드러움', value: smoothness),
+                _ScoreChip(label: '보상억제', value: compensation),
+                _ScoreChip(label: '가동범위', value: rom),
+              ],
+            ),
+          ],
         ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Text(
-            '오늘 $count번 했어요\n최고 $best점 · 평균 ${avg.toStringAsFixed(1)}점 · ${_shortComment(avg)}',
-          ),
+      ),
+    );
+  }
+}
+
+class _ScoreChip extends StatelessWidget {
+  final String label;
+  final int value;
+
+  const _ScoreChip({
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      label: Text('$label $value점'),
+    );
+  }
+}
+
+class _InsightCard extends StatelessWidget {
+  final String bestTitle;
+  final int bestScore;
+  final String needTitle;
+  final int needScore;
+
+  const _InsightCard({
+    required this.bestTitle,
+    required this.bestScore,
+    required this.needTitle,
+    required this.needScore,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 1,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '한눈에 보기',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text('가장 잘한 운동: $bestTitle ($bestScore점)'),
+            const SizedBox(height: 4),
+            Text('조금 더 연습할 운동: $needTitle ($needScore점)'),
+          ],
         ),
       ),
     );
