@@ -1,18 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:isar/isar.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
+import '../config/app_config.dart';
 import '../models/session_log.dart';
 import '../storage/isar_db.dart';
 import '../utils/voice_guide.dart';
-
-String _serverBaseUrl() {
-  return 'http://192.168.10.107:5000';
-}
 
 class FeedbackScreen extends StatefulWidget {
   const FeedbackScreen({super.key});
@@ -32,6 +31,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   int _routineIndex = 0;
   bool _fromRoutine = false;
 
+  int _repeatCount = 1;
+  int _repeatIndex = 0;
+  String? _referenceVideoPath;
+
   int _overall = 0;
   int _symmetry = 0;
   int _timing = 0;
@@ -48,19 +51,79 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Map<String, dynamic> _features = <String, dynamic>{};
 
   Timer? _autoTimer;
-  int _secondsLeft = 3;
+  int _secondsLeft = 5;
+
+  final stt.SpeechToText _speech = stt.SpeechToText();
+  bool _speechReady = false;
+  bool _listening = false;
+  String _lastRecognizedWords = '';
+
+  bool get _hasRoutine => _fromRoutine && _routineExerciseIds.isNotEmpty;
+  bool get _isLastRoutineItem {
+    if (!_hasRoutine) return false;
+    return _routineIndex >= _routineExerciseIds.length - 1;
+  }
+
+  bool get _isRepeatMode => _repeatCount > 1;
+  bool get _isLastRepeat => _repeatIndex >= _repeatCount - 1;
+  bool get _hasMoreRepeats => _repeatIndex < _repeatCount - 1;
+  int get _currentRepeatNumber => _repeatIndex + 1;
+  int get _nextRepeatNumber => _repeatIndex + 2;
 
   @override
   void initState() {
     super.initState();
+    _initSpeech();
     WidgetsBinding.instance.addPostFrameCallback((_) => _saveScore());
   }
 
   @override
   void dispose() {
     _autoTimer?.cancel();
+    _stopListening();
     VoiceGuide.stop();
     super.dispose();
+  }
+
+  Future<void> _initSpeech() async {
+    try {
+      final available = await _speech.initialize(
+        onStatus: (status) {
+          if (!mounted) return;
+          setState(() {
+            _listening = status == 'listening';
+          });
+        },
+        onError: (error) {
+          if (!mounted) return;
+          setState(() {
+            _listening = false;
+          });
+        },
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _speechReady = available;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _speechReady = false;
+      });
+    }
+  }
+
+  Future<void> _stopListening() async {
+    try {
+      if (_speech.isListening) {
+        await _speech.stop();
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _listening = false;
+    });
   }
 
   String _dateKey(DateTime dt) {
@@ -89,6 +152,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   String _scoreTitle() {
+    if (_quality['needsRetake'] == true) {
+      return '다시 한 번 해볼게요';
+    }
+    if (_hasMoreRepeats) {
+      return '좋아요. 한 번 더 해볼게요';
+    }
     if (_overall >= 85) return '아주 좋아요';
     if (_overall >= 70) return '잘했어요';
     if (_overall >= 50) return '조금 더 연습해볼게요';
@@ -98,6 +167,18 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   String _scoreComment() {
     if (_quality['needsRetake'] == true) {
       return _retakeMessage();
+    }
+    if (_hasMoreRepeats) {
+      if (_overall >= 85) {
+        return '이번 반복은 아주 좋았어요. 같은 동작을 한 번 더 해볼게요.';
+      }
+      if (_overall >= 70) {
+        return '좋아요. 이번엔 조금 더 안정적으로 해볼게요.';
+      }
+      if (_overall >= 50) {
+        return '동작은 잘 보였어요. 다음 반복에서 조금 더 크게 해보세요.';
+      }
+      return '다음 반복에서는 조금 더 천천히, 크게 움직여 보세요.';
     }
     if (_overall >= 85) {
       return '동작이 안정적으로 잘 수행되었어요.';
@@ -109,6 +190,41 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       return '목표 동작은 보였지만 범위나 안정성이 더 필요해요.';
     }
     return '조금 더 크게, 천천히 다시 해보면 더 정확하게 평가할 수 있어요.';
+  }
+
+  String _repeatCoachingMessage() {
+    final scoreMap = <String, int>{
+      'rom': _rom,
+      'compensation': _compensation,
+      'symmetry': _symmetry,
+      'smoothness': _smoothness,
+      'timing': _timing,
+    };
+
+    String lowestKey = 'rom';
+    int lowestValue = 999;
+
+    scoreMap.forEach((key, value) {
+      if (value < lowestValue) {
+        lowestValue = value;
+        lowestKey = key;
+      }
+    });
+
+    switch (lowestKey) {
+      case 'rom':
+        return '이번에는 팔을 조금 더 크게 움직여 보세요.';
+      case 'compensation':
+        return '몸통이 기울지 않도록 천천히 다시 해보세요.';
+      case 'symmetry':
+        return '좌우 균형을 맞춘다는 느낌으로 해보세요.';
+      case 'smoothness':
+        return '조금 더 부드럽게 이어서 움직여 보세요.';
+      case 'timing':
+        return '예시 영상을 보며 속도를 조금 더 맞춰보세요.';
+      default:
+        return '이번에는 조금 더 천천히 정확하게 해보세요.';
+    }
   }
 
   String _labelForScore(String key) {
@@ -221,21 +337,169 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     }
   }
 
-  bool get _hasRoutine => _fromRoutine && _routineExerciseIds.isNotEmpty;
-
-  bool get _isLastRoutineItem {
-    if (!_hasRoutine) return false;
-    return _routineIndex >= _routineExerciseIds.length - 1;
-  }
-
   int? _nextRoutineExerciseId() {
     if (!_hasRoutine || _isLastRoutineItem) return null;
     return _routineExerciseIds[_routineIndex + 1];
   }
 
+  String _normalizeSpeech(String text) {
+    return text
+        .replaceAll(' ', '')
+        .replaceAll('.', '')
+        .replaceAll(',', '')
+        .replaceAll('\n', '')
+        .trim()
+        .toLowerCase();
+  }
+
+  String _voiceGuideText(bool needsRetake) {
+    if (needsRetake) {
+      return '원하시면 말로도 선택할 수 있어요. 다시 라고 말하면 다시 시작합니다.';
+    }
+
+    if (_hasMoreRepeats) {
+      return '원하시면 말로도 선택할 수 있어요. 다음 이라고 말하면 다음 반복을 시작합니다.';
+    }
+
+    if (_hasRoutine) {
+      if (_isLastRoutineItem) {
+        return '원하시면 말로도 선택할 수 있어요. 결과 또는 종료 라고 말하면 결과 화면으로 이동합니다.';
+      }
+      return '원하시면 말로도 선택할 수 있어요. 다음 이라고 말하면 다음 운동을 시작합니다. 종료 라고 말하면 오늘 운동을 마칩니다.';
+    }
+
+    return '원하시면 말로도 선택할 수 있어요. 다음 이라고 말하면 다음 추천 운동을 시작합니다. 선택 이라고 말하면 운동 선택 화면으로 이동합니다. 종료 라고 말하면 오늘 운동을 종료합니다.';
+  }
+
+  List<String> _voiceCommands(bool needsRetake) {
+    if (needsRetake) {
+      return const ['다시'];
+    }
+
+    if (_hasMoreRepeats) {
+      return const ['다음'];
+    }
+
+    if (_hasRoutine) {
+      if (_isLastRoutineItem) {
+        return const ['결과', '종료'];
+      }
+      return const ['다음', '종료'];
+    }
+
+    return const ['다음', '선택', '종료'];
+  }
+
+  Future<void> _announceVoiceCommandsAndListen(bool needsRetake) async {
+    if (!_speechReady) return;
+
+    await _stopListening();
+    await VoiceGuide.speak(_voiceGuideText(needsRetake));
+    await _startListening(needsRetake: needsRetake);
+  }
+
+  Future<void> _startListening({required bool needsRetake}) async {
+    if (!_speechReady) return;
+
+    try {
+      await _speech.listen(
+        onResult: (result) {
+          final words = result.recognizedWords.trim();
+
+          if (!mounted) return;
+          setState(() {
+            _lastRecognizedWords = words;
+          });
+
+          if (words.isEmpty) return;
+
+          final normalized = _normalizeSpeech(words);
+
+          if (needsRetake) {
+            if (normalized.contains('다시') ||
+                normalized.contains('재시도') ||
+                normalized.contains('다시시작')) {
+              _retryCurrentExercise();
+              return;
+            }
+            return;
+          }
+
+          if (_hasMoreRepeats) {
+            if (normalized.contains('다음') || normalized.contains('시작')) {
+              _goNextRepeat();
+              return;
+            }
+            return;
+          }
+
+          if (_hasRoutine) {
+            if (_isLastRoutineItem) {
+              if (normalized.contains('결과') ||
+                  normalized.contains('완료') ||
+                  normalized.contains('종료')) {
+                _goNextRoutineStep();
+                return;
+              }
+            } else {
+              if (normalized.contains('다음') || normalized.contains('시작')) {
+                _goNextRoutineStep();
+                return;
+              }
+              if (normalized.contains('종료') ||
+                  normalized.contains('여기까지')) {
+                _autoTimer?.cancel();
+                context.go('/results', extra: {
+                  'patientId': _patientId,
+                  'sessionUuid': _sessionUuid,
+                  'affectedSide': _affectedSide,
+                });
+                return;
+              }
+            }
+          } else {
+            if (normalized.contains('다음') || normalized.contains('시작')) {
+              _goRecommendedExercise();
+              return;
+            }
+            if (normalized.contains('선택') ||
+                normalized.contains('직접선택')) {
+              _autoTimer?.cancel();
+              context.go('/exercise', extra: {
+                'patientId': _patientId,
+                'affectedSide': _affectedSide,
+              });
+              return;
+            }
+            if (normalized.contains('종료') ||
+                normalized.contains('결과') ||
+                normalized.contains('여기까지')) {
+              _autoTimer?.cancel();
+              context.go('/results', extra: {
+                'patientId': _patientId,
+                'sessionUuid': _sessionUuid,
+                'affectedSide': _affectedSide,
+              });
+              return;
+            }
+          }
+        },
+        listenFor: const Duration(seconds: 8),
+        pauseFor: const Duration(seconds: 3),
+        partialResults: true,
+        cancelOnError: true,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _listening = false;
+      });
+    }
+  }
+
   void _startAutoNext() {
     _autoTimer?.cancel();
-    _secondsLeft = 3;
+    _secondsLeft = 5;
 
     _autoTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -245,6 +509,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       if (_secondsLeft <= 1) {
         timer.cancel();
+
+        if (_hasMoreRepeats) {
+          _goNextRepeat();
+          return;
+        }
+
         if (_hasRoutine) {
           _goNextRoutineStep();
         } else {
@@ -260,22 +530,28 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   void _goRecommendedExercise() {
     _autoTimer?.cancel();
+    _stopListening();
 
     context.go('/record', extra: {
       'patientId': _patientId,
       'exerciseId': _recommendedExerciseId(),
       'sessionUuid': DateTime.now().microsecondsSinceEpoch.toString(),
       'affectedSide': _affectedSide,
+      'repeatCount': 1,
+      'repeatIndex': 0,
+      'referenceVideoPath': null,
     });
   }
 
   void _goNextRoutineStep() {
     _autoTimer?.cancel();
+    _stopListening();
 
     if (_isLastRoutineItem) {
       context.go('/results', extra: {
         'patientId': _patientId,
         'sessionUuid': _sessionUuid,
+        'affectedSide': _affectedSide,
       });
       return;
     }
@@ -285,6 +561,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       context.go('/results', extra: {
         'patientId': _patientId,
         'sessionUuid': _sessionUuid,
+        'affectedSide': _affectedSide,
       });
       return;
     }
@@ -297,11 +574,61 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       'routineExerciseIds': _routineExerciseIds,
       'routineIndex': _routineIndex + 1,
       'fromRoutine': true,
+      'repeatCount': 1,
+      'repeatIndex': 0,
+      'referenceVideoPath': null,
+    });
+  }
+
+  void _goNextRepeat() {
+    _autoTimer?.cancel();
+    _stopListening();
+
+    final refPath = _referenceVideoPath;
+    if (refPath == null || refPath.isEmpty || !File(refPath).existsSync()) {
+      _retryCurrentExercise();
+      return;
+    }
+
+    context.go('/review', extra: {
+      'videoPath': refPath,
+      'referenceVideoPath': refPath,
+      'patientId': _patientId,
+      'exerciseId': _exerciseId,
+      'sessionUuid': _sessionUuid,
+      'affectedSide': _affectedSide,
+      'routineExerciseIds': _routineExerciseIds,
+      'routineIndex': _routineIndex,
+      'fromRoutine': _fromRoutine,
+      'repeatCount': _repeatCount,
+      'repeatIndex': _repeatIndex + 1,
     });
   }
 
   void _retryCurrentExercise() {
     _autoTimer?.cancel();
+    _stopListening();
+
+    final refPath = _referenceVideoPath;
+    if (_isRepeatMode &&
+        refPath != null &&
+        refPath.isNotEmpty &&
+        File(refPath).existsSync()) {
+      context.go('/review', extra: {
+        'videoPath': refPath,
+        'referenceVideoPath': refPath,
+        'patientId': _patientId,
+        'exerciseId': _exerciseId,
+        'sessionUuid': _sessionUuid,
+        'affectedSide': _affectedSide,
+        'routineExerciseIds': _routineExerciseIds,
+        'routineIndex': _routineIndex,
+        'fromRoutine': _fromRoutine,
+        'repeatCount': _repeatCount,
+        'repeatIndex': _repeatIndex,
+      });
+      return;
+    }
 
     context.go('/record', extra: {
       'patientId': _patientId,
@@ -311,6 +638,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       'routineExerciseIds': _routineExerciseIds,
       'routineIndex': _routineIndex,
       'fromRoutine': _fromRoutine,
+      'repeatCount': _repeatCount,
+      'repeatIndex': 0,
+      'referenceVideoPath': null,
     });
   }
 
@@ -330,6 +660,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       }
       _routineIndex = (data?['routineIndex'] as int?) ?? 0;
 
+      _repeatCount = (data?['repeatCount'] as int?) ?? 1;
+      _repeatIndex = (data?['repeatIndex'] as int?) ?? 0;
+
       final patientId = data?['patientId'] as int?;
       final modelPath = data?['modelPath'] as String?;
       final patientPath = data?['patientPath'] as String?;
@@ -344,6 +677,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         throw Exception('patientPath가 없습니다.');
       }
 
+      _referenceVideoPath = modelPath;
       _patientId = patientId;
       _exerciseId = exerciseId;
 
@@ -434,18 +768,35 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       if (!mounted) return;
       setState(() => _saving = false);
 
-      if (result.quality['needsRetake'] == true) {
+      final needsRetake = result.quality['needsRetake'] == true;
+
+      if (needsRetake) {
         await VoiceGuide.speak('다시 한 번 촬영해 주세요.');
-      } else if (_hasRoutine) {
+        await _announceVoiceCommandsAndListen(true);
+        return;
+      }
+
+      if (_hasMoreRepeats) {
+        await VoiceGuide.speak(
+          '잘하셨습니다. ${_nextRepeatNumber}번째 반복으로 넘어갑니다.',
+        );
+        _startAutoNext();
+        await _announceVoiceCommandsAndListen(false);
+        return;
+      }
+
+      if (_hasRoutine) {
         if (_isLastRoutineItem) {
           await VoiceGuide.speak('잘하셨습니다. 오늘의 운동이 완료되었습니다.');
         } else {
           await VoiceGuide.speak('잘하셨습니다. 다음 운동으로 넘어갑니다.');
         }
         _startAutoNext();
+        await _announceVoiceCommandsAndListen(false);
       } else {
         await VoiceGuide.speak('잘하셨습니다. 다음 추천 운동으로 넘어갑니다.');
         _startAutoNext();
+        await _announceVoiceCommandsAndListen(false);
       }
     } catch (e) {
       if (!mounted) return;
@@ -460,11 +811,15 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     required String referenceVideoPath,
     required String imitationVideoPath,
   }) async {
-    final uri = Uri.parse('${_serverBaseUrl()}/analyze');
+    final uri = Uri.parse(AppConfig.analyzeEndpoint);
 
     final req = http.MultipartRequest('POST', uri)
-      ..files.add(await http.MultipartFile.fromPath('reference', referenceVideoPath))
-      ..files.add(await http.MultipartFile.fromPath('imitation', imitationVideoPath))
+      ..files.add(
+        await http.MultipartFile.fromPath('reference', referenceVideoPath),
+      )
+      ..files.add(
+        await http.MultipartFile.fromPath('imitation', imitationVideoPath),
+      )
       ..fields['exerciseId'] = _exerciseId.toString()
       ..fields['affectedSide'] = _affectedSide;
 
@@ -496,24 +851,408 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     );
   }
 
-  Widget _scoreChip(String label, int value) {
+  Color _scoreColor(int value) {
+    if (value >= 85) return const Color(0xFF3FAE6F);
+    if (value >= 70) return const Color(0xFF5B8DEF);
+    if (value >= 50) return const Color(0xFFE0A63E);
+    return const Color(0xFFE57373);
+  }
+
+  Widget _scoreTile(String label, int value) {
+    final color = _scoreColor(value);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(14),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: color.withOpacity(0.18)),
       ),
       child: Row(
         children: [
           Expanded(
             child: Text(
               label,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '$value점',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _resultSummaryCard(bool needsRetake) {
+    final color = needsRetake
+        ? const Color(0xFFFFF3E8)
+        : const Color(0xFFEAF2FF);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Text(
-            '$value점',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+            _scoreTitle(),
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Text(
+                '총점',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                '$_overall',
+                style: const TextStyle(
+                  fontSize: 40,
+                  fontWeight: FontWeight.w800,
+                  height: 1.0,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Padding(
+                padding: EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '점',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _scoreComment(),
+            style: const TextStyle(
+              fontSize: 16,
+              height: 1.5,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _repeatSummaryCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7EE),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '좋아요. 한 번 더 해볼게요',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              height: 1.25,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              const Text(
+                '현재 반복',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                '$_currentRepeatNumber / $_repeatCount',
+                style: const TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  height: 1.0,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _repeatCoachingMessage(),
+            style: const TextStyle(
+              fontSize: 16,
+              height: 1.5,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _voiceCommandCard(bool needsRetake) {
+    final commands = _voiceCommands(needsRetake);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FAFF),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFDCE6F2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.mic_none_rounded),
+              const SizedBox(width: 8),
+              const Text(
+                '말로도 선택할 수 있어요',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const Spacer(),
+              if (_speechReady)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _listening
+                        ? const Color(0xFFEAF7EE)
+                        : const Color(0xFFF1F4F8),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    _listening ? '듣는 중' : '대기',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _listening
+                          ? const Color(0xFF3FAE6F)
+                          : const Color(0xFF5B6676),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: commands
+                .map(
+                  (cmd) => Chip(
+                label: Text(
+                  cmd,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            )
+                .toList(),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _speechReady
+                ? '원하는 버튼 대신 위 단어를 말해 보세요.'
+                : '이 기기에서는 음성 인식을 사용할 수 없어요.',
+            style: const TextStyle(
+              fontSize: 15,
+              height: 1.4,
+            ),
+          ),
+          if (_lastRecognizedWords.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              '인식된 말: $_lastRecognizedWords',
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF5B6676),
+              ),
+            ),
+          ],
+          if (_speechReady) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _startListening(needsRetake: needsRetake),
+                icon: Icon(_listening ? Icons.mic : Icons.mic_none),
+                label: Text(_listening ? '듣는 중' : '음성으로 선택하기'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _repeatNextCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7EE),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '다음 반복',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$_nextRepeatNumber번째 반복',
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '$_secondsLeft초 후 다시 관찰하고 따라하기를 시작합니다.',
+            style: const TextStyle(
+              fontSize: 15,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _routineNextCard(int? nextRoutineExerciseId) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7EE),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            _isLastRoutineItem ? '오늘의 운동 완료' : '다음 운동',
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _isLastRoutineItem
+                ? '모든 추천 운동을 완료했어요.'
+                : _exerciseName(nextRoutineExerciseId ?? 0),
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _isLastRoutineItem
+                ? '$_secondsLeft초 후 결과 화면으로 이동합니다.'
+                : '$_secondsLeft초 후 다음 운동으로 자동 진행합니다.',
+            style: const TextStyle(
+              fontSize: 15,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _recommendedNextCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF7EE),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '다음 추천 운동',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _exerciseName(_recommendedExerciseId()),
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              height: 1.2,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _recommendedReason(),
+            style: const TextStyle(
+              fontSize: 15,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '$_secondsLeft초 후 자동으로 시작합니다.',
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF5B8DEF),
+            ),
           ),
         ],
       ),
@@ -527,7 +1266,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('운동 결과'),
+        title: Text(
+          _isRepeatMode ? '반복 $_currentRepeatNumber / $_repeatCount 결과' : '운동 결과',
+        ),
       ),
       body: SafeArea(
         child: _saving
@@ -535,8 +1276,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             : (_error != null)
             ? Center(
           child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text('저장 실패: $_error'),
+            padding: const EdgeInsets.all(20),
+            child: Text(
+              '저장 실패: $_error',
+              style: const TextStyle(fontSize: 16),
+            ),
           ),
         )
             : Padding(
@@ -544,85 +1288,48 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _scoreTitle(),
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        const Text(
-                          '총점',
-                          style: TextStyle(fontSize: 16),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          '$_overall점',
-                          style: const TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      _scoreComment(),
-                      style: const TextStyle(
-                        fontSize: 15,
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              if (!needsRetake && _hasMoreRepeats)
+                _repeatSummaryCard()
+              else
+                _resultSummaryCard(needsRetake),
+              const SizedBox(height: 16),
+              _voiceCommandCard(needsRetake),
               const SizedBox(height: 16),
               Text(
-                '세부 결과',
-                style: Theme.of(context).textTheme.titleMedium,
+                _hasMoreRepeats ? '이번 반복에서 확인한 점' : '세부 결과',
+                style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 10),
               Expanded(
                 child: ListView(
                   children: [
-                    _scoreChip(_labelForScore('rom'), _rom),
+                    _scoreTile(_labelForScore('rom'), _rom),
                     const SizedBox(height: 10),
-                    _scoreChip(_labelForScore('compensation'), _compensation),
+                    _scoreTile(_labelForScore('compensation'), _compensation),
                     const SizedBox(height: 10),
-                    _scoreChip(_labelForScore('symmetry'), _symmetry),
+                    _scoreTile(_labelForScore('symmetry'), _symmetry),
                     const SizedBox(height: 10),
-                    _scoreChip(_labelForScore('smoothness'), _smoothness),
+                    _scoreTile(_labelForScore('smoothness'), _smoothness),
                     const SizedBox(height: 10),
-                    _scoreChip(_labelForScore('timing'), _timing),
+                    _scoreTile(_labelForScore('timing'), _timing),
                     if (needsRetake) ...[
                       const SizedBox(height: 16),
                       Container(
                         width: double.infinity,
-                        padding: const EdgeInsets.all(14),
+                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: Colors.orange.shade50,
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(color: Colors.orange.shade200),
+                          color: const Color(0xFFFFF3E8),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: const Color(0xFFFFD6A5),
+                          ),
                         ),
                         child: Text(
                           _retakeMessage(),
                           style: const TextStyle(
-                            fontSize: 15,
-                            height: 1.4,
-                            fontWeight: FontWeight.w500,
+                            fontSize: 16,
+                            height: 1.45,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -631,51 +1338,36 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              if (!needsRetake && _hasRoutine) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _isLastRoutineItem ? '오늘의 운동 완료' : '다음 운동',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _isLastRoutineItem
-                            ? '모든 추천 운동을 완료했어요.'
-                            : _exerciseName(nextRoutineExerciseId ?? 0),
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _isLastRoutineItem
-                            ? '결과 화면으로 이동합니다.'
-                            : '$_secondsLeft초 후 다음 운동으로 자동 진행합니다.',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+              if (!needsRetake && _hasMoreRepeats) ...[
+                _repeatNextCard(),
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
-                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: _goNextRepeat,
+                    child: Text('$_nextRepeatNumber번째 따라하기 시작'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      _autoTimer?.cancel();
+                      _stopListening();
+                      context.go('/exercise', extra: {
+                        'patientId': _patientId,
+                        'affectedSide': _affectedSide,
+                      });
+                    },
+                    child: const Text('운동 선택으로'),
+                  ),
+                ),
+              ] else if (!needsRetake && _hasRoutine) ...[
+                _routineNextCard(nextRoutineExerciseId),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
                   child: ElevatedButton(
                     onPressed: _goNextRoutineStep,
                     child: Text(
@@ -688,68 +1380,24 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
-                  height: 52,
                   child: OutlinedButton(
                     onPressed: () {
                       _autoTimer?.cancel();
+                      _stopListening();
                       context.go('/results', extra: {
                         'patientId': _patientId,
                         'sessionUuid': _sessionUuid,
+                        'affectedSide': _affectedSide,
                       });
                     },
                     child: const Text('오늘 운동 종료'),
                   ),
                 ),
               ] else if (!needsRetake) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        '다음 추천 운동',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _exerciseName(_recommendedExerciseId()),
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        _recommendedReason(),
-                        style: const TextStyle(
-                          fontSize: 14,
-                          height: 1.4,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        '$_secondsLeft초 후 자동으로 시작합니다.',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.blue,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                _recommendedNextCard(),
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
-                  height: 52,
                   child: ElevatedButton(
                     onPressed: _goRecommendedExercise,
                     child: Text(
@@ -760,10 +1408,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
-                  height: 52,
                   child: OutlinedButton(
                     onPressed: () {
                       _autoTimer?.cancel();
+                      _stopListening();
                       context.go('/exercise', extra: {
                         'patientId': _patientId,
                         'affectedSide': _affectedSide,
@@ -775,13 +1423,14 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,
-                  height: 52,
                   child: TextButton(
                     onPressed: () {
                       _autoTimer?.cancel();
+                      _stopListening();
                       context.go('/results', extra: {
                         'patientId': _patientId,
                         'sessionUuid': _sessionUuid,
+                        'affectedSide': _affectedSide,
                       });
                     },
                     child: const Text('오늘은 여기까지'),
@@ -790,10 +1439,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               ] else ...[
                 SizedBox(
                   width: double.infinity,
-                  height: 52,
                   child: ElevatedButton(
                     onPressed: _retryCurrentExercise,
-                    child: const Text('다시 촬영하기'),
+                    child: const Text('다시 시작하기'),
                   ),
                 ),
               ],
