@@ -38,8 +38,10 @@ class _PatientListScreenState extends State<PatientListScreen> {
       final progressMap = <int, PatientProgressSummary>{};
 
       for (final patient in patients) {
-        final patientLogs = logs.where((e) => e.patientId == patient.id).toList();
-        progressMap[patient.id] = PatientProgressHelper.fromLogs(patientLogs);
+        final patientLogs =
+            logs.where((e) => e.patientId == patient.id).toList();
+        progressMap[patient.id] =
+            PatientProgressHelper.fromLogs(patientLogs);
       }
 
       patients.sort((a, b) => b.id.compareTo(a.id));
@@ -158,6 +160,55 @@ class _PatientListScreenState extends State<PatientListScreen> {
         : const Color(0xFFE0A63E);
   }
 
+  Widget _emptyView() {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: Responsive.horizontalPadding(context),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.people_alt_outlined,
+              size: Responsive.isTablet(context) ? 96 : 72,
+              color: const Color(0xFFB8C2CC),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '등록된 사용자가 없습니다.',
+              style: TextStyle(
+                fontSize: Responsive.isTablet(context) ? 24 : 20,
+                fontWeight: FontWeight.w800,
+                color: const Color(0xFF2F3A4A),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '새 사용자를 등록한 뒤 운동을 시작해 주세요.',
+              style: TextStyle(
+                fontSize: Responsive.isTablet(context) ? 16 : 14,
+                color: const Color(0xFF667085),
+                height: 1.5,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _goToNewPatient,
+                icon: const Icon(Icons.person_add),
+                label: const Text('새 사용자 등록하기'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isTablet = Responsive.isTablet(context);
@@ -176,87 +227,41 @@ class _PatientListScreenState extends State<PatientListScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : (_error != null)
-          ? Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Text(
-            '오류: $_error',
-            style: const TextStyle(fontSize: 16),
-          ),
-        ),
-      )
-          : AppScaffoldBody(
-        child: _patients.isEmpty ? _emptyView() : _patientList(isTablet),
-      ),
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      '오류: $_error',
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                  ),
+                )
+              : AppScaffoldBody(
+                  child: _patients.isEmpty
+                      ? _emptyView()
+                      : _patientList(isTablet),
+                ),
       bottomNavigationBar: _patients.isEmpty
           ? null
           : SafeArea(
-        top: false,
-        child: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: Responsive.maxContentWidth(context),
-            ),
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(
-                Responsive.horizontalPadding(context),
-                8,
-                Responsive.horizontalPadding(context),
-                16,
-              ),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _goToNewPatient,
-                  icon: const Icon(Icons.person_add),
-                  label: const Text('새 사용자 등록하기'),
+              top: false,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  Responsive.horizontalPadding(context),
+                  8,
+                  Responsive.horizontalPadding(context),
+                  16,
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _goToNewPatient,
+                    icon: const Icon(Icons.person_add),
+                    label: const Text('새 사용자 등록하기'),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _emptyView() {
-    return Builder(
-      builder: (context) => Padding(
-        padding: EdgeInsets.all(Responsive.isTablet(context) ? 28 : 24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.person_outline,
-              size: Responsive.isTablet(context) ? 84 : 72,
-            ),
-            const SizedBox(height: 20),
-            Text(
-              '등록된 사용자가 없습니다',
-              style: TextStyle(
-                fontSize: Responsive.largeTitleFontSize(context) - 4,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '새 사용자를 등록해 주세요',
-              style: TextStyle(
-                fontSize: Responsive.bodyFontSize(context),
-              ),
-            ),
-            const SizedBox(height: 30),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _goToNewPatient,
-                child: const Text('새 사용자 등록하기'),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
@@ -315,7 +320,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
   Widget _patientCard(Patient p, PatientProgressSummary progress) {
     final badges = progress.badges.take(3).toList();
     final extraBadgeCount =
-    progress.badges.length > 3 ? progress.badges.length - 3 : 0;
+        progress.badges.length > 3 ? progress.badges.length - 3 : 0;
 
     return InkWell(
       onTap: () => _selectPatient(p),
@@ -380,8 +385,10 @@ class _PatientListScreenState extends State<PatientListScreen> {
               runSpacing: 8,
               children: [
                 Container(
-                  padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: _statusColor(progress.completedToday),
                     borderRadius: BorderRadius.circular(999),
@@ -415,7 +422,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
                 runSpacing: 8,
                 children: [
                   ...badges.map(
-                        (badge) => Container(
+                    (badge) => Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
                         vertical: 8,

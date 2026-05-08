@@ -20,6 +20,7 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
   bool _initializing = true;
   bool _recording = false;
   bool _autoFlowStarted = false;
+  bool _finalizing = false;
 
   XFile? _videoFile;
 
@@ -39,7 +40,7 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
     try {
       final cameras = await availableCameras();
       final front =
-      cameras.where((c) => c.lensDirection == CameraLensDirection.front);
+          cameras.where((c) => c.lensDirection == CameraLensDirection.front);
       final selected = front.isNotEmpty ? front.first : cameras.first;
 
       final controller = CameraController(
@@ -75,7 +76,7 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
     super.dispose();
   }
 
-  void _startAutoFlow() async {
+  Future<void> _startAutoFlow() async {
     if (_autoFlowStarted) return;
     _autoFlowStarted = true;
 
@@ -85,10 +86,23 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
     final int screeningIndex = (data?['screeningIndex'] as int?) ?? 0;
     final currentItem = screeningFunctionItems[screeningIndex];
 
+    // 화면 진입 후 동작 설명
     await VoiceGuide.speak(currentItem.voiceGuide);
-    await VoiceGuide.speak('준비해 주세요. 3초 후 시작합니다.');
 
-    _prepareSeconds = 3;
+    // 설명과 시작 안내 사이를 약간 분리
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    // 촬영 시작 안내
+    await VoiceGuide.speak('준비해 주세요. 3초 후 촬영을 시작합니다.');
+
+    if (!mounted) return;
+
+    setState(() {
+      _prepareSeconds = 3;
+      _recording = false;
+      _finalizing = false;
+    });
+
     _prepareTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (!mounted) {
         timer.cancel();
@@ -121,6 +135,7 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
       if (!mounted) return;
       setState(() {
         _recording = true;
+        _finalizing = false;
         _videoFile = null;
         _recordSeconds = 5;
       });
@@ -153,24 +168,33 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
     if (c == null || !c.value.isInitialized || !_recording) return;
 
     try {
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _finalizing = true;
+      });
+
       final file = await c.stopVideoRecording();
 
       if (!mounted) return;
       setState(() {
-        _recording = false;
+        _finalizing = false;
         _videoFile = file;
       });
 
       _goAnalyze();
     } catch (e) {
       if (!mounted) return;
+      setState(() {
+        _finalizing = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('자동 녹화 종료 실패: $e')),
       );
     }
   }
 
-  void _cancelEvaluation() async {
+  Future<void> _cancelEvaluation() async {
     _prepareTimer?.cancel();
     _recordTimer?.cancel();
     await VoiceGuide.stop();
@@ -204,7 +228,7 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
         (data?['screeningSessionUuid'] as String?) ?? '';
     final Map<String, int> screeningScores =
         (data?['screeningScores'] as Map?)
-            ?.map((k, v) => MapEntry('$k', v as int)) ??
+                ?.map((k, v) => MapEntry('$k', v as int)) ??
             <String, int>{};
 
     final currentItem = screeningFunctionItems[screeningIndex];
@@ -278,8 +302,11 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
     if (_recording) {
       return '지금 동작을 수행해 주세요. $_recordSeconds초 남았어요.';
     }
+    if (_finalizing) {
+      return '촬영을 마무리하고 있습니다.';
+    }
     if (_prepareSeconds > 0) {
-      return '준비해 주세요. $_prepareSeconds초 후 시작합니다.';
+      return '준비해 주세요. $_prepareSeconds초 후 촬영을 시작합니다.';
     }
     return '영상 확인 중입니다.';
   }
@@ -298,7 +325,7 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        _cancelEvaluation();
+        await _cancelEvaluation();
       },
       child: Scaffold(
         appBar: AppBar(
@@ -311,105 +338,105 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
         body: _initializing
             ? const Center(child: CircularProgressIndicator())
             : (_controller == null || !_controller!.value.isInitialized)
-            ? const Center(child: Text('카메라를 사용할 수 없습니다.'))
-            : Column(
-          children: [
-            Container(
-              width: double.infinity,
-              margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '상지 기능 평가 ${screeningIndex + 1} / $screeningTotal',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    currentItem.title,
-                    style: const TextStyle(
-                      fontSize: 19,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    currentItem.desc,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '화면 안에 상체와 팔이 잘 보이도록 위치해 주세요.',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey.shade700,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _statusText(),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey.shade700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  CameraPreview(_controller!),
-                  _buildTargetOverlay(currentItem.exerciseId),
-                  if (_prepareSeconds > 0 && !_recording)
-                    Center(
-                      child: Container(
-                        width: 120,
-                        height: 120,
+                ? const Center(child: Text('카메라를 사용할 수 없습니다.'))
+                : Column(
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.black.withOpacity(0.45),
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                        child: Center(
-                          child: Text(
-                            '$_prepareSeconds',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 44,
-                              fontWeight: FontWeight.bold,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '상지 기능 평가 ${screeningIndex + 1} / $screeningTotal',
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              currentItem.title,
+                              style: const TextStyle(
+                                fontSize: 19,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              currentItem.desc,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              '화면 안에 상체와 팔이 잘 보이도록 위치해 주세요.',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _statusText(),
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            CameraPreview(_controller!),
+                            _buildTargetOverlay(currentItem.exerciseId),
+                            if (_prepareSeconds > 0 && !_recording && !_finalizing)
+                              Center(
+                                child: Container(
+                                  width: 120,
+                                  height: 120,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.black.withOpacity(0.45),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      '$_prepareSeconds',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 44,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      SafeArea(
+                        top: false,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                          child: SizedBox(
+                            width: double.infinity,
+                            height: 52,
+                            child: OutlinedButton(
+                              onPressed: _cancelEvaluation,
+                              child: const Text('평가 중단하기'),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-            ),
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: OutlinedButton(
-                    onPressed: _cancelEvaluation,
-                    child: const Text('평가 중단하기'),
+                    ],
                   ),
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

@@ -780,7 +780,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         await VoiceGuide.speak(
           '잘하셨습니다. ${_nextRepeatNumber}번째 반복으로 넘어갑니다.',
         );
-        _startAutoNext();
+
         await _announceVoiceCommandsAndListen(false);
         return;
       }
@@ -1155,7 +1155,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            '$_secondsLeft초 후 다시 관찰하고 따라하기를 시작합니다.',
+            '준비되시면 다음 버튼을 누르거나 "다음"이라고 말씀해 주세요.',
             style: const TextStyle(
               fontSize: 15,
               height: 1.4,

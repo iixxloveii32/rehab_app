@@ -488,6 +488,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
 
   bool _initializing = true;
   bool _recording = false;
+  bool _finalizing = false;
   bool _autoFlowStarted = false;
 
   XFile? _videoFile;
@@ -508,7 +509,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
     try {
       final cameras = await availableCameras();
       final front =
-      cameras.where((c) => c.lensDirection == CameraLensDirection.front);
+          cameras.where((c) => c.lensDirection == CameraLensDirection.front);
       final selected = front.isNotEmpty ? front.first : cameras.first;
 
       final controller = CameraController(
@@ -571,7 +572,13 @@ class _RecordingScreenState extends State<RecordingScreen> {
 
     await VoiceGuide.speak('준비해 주세요. 3초 후 촬영이 시작됩니다.');
 
-    _prepareSeconds = 3;
+    if (!mounted) return;
+    setState(() {
+      _prepareSeconds = 3;
+      _recording = false;
+      _finalizing = false;
+    });
+
     _prepareTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (!mounted) {
         timer.cancel();
@@ -604,6 +611,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
       if (!mounted) return;
       setState(() {
         _recording = true;
+        _finalizing = false;
         _videoFile = null;
         _recordSeconds = 6;
       });
@@ -636,17 +644,26 @@ class _RecordingScreenState extends State<RecordingScreen> {
     if (c == null || !c.value.isInitialized || !_recording) return;
 
     try {
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _finalizing = true;
+      });
+
       final file = await c.stopVideoRecording();
 
       if (!mounted) return;
       setState(() {
-        _recording = false;
+        _finalizing = false;
         _videoFile = file;
       });
 
       _goNext();
     } catch (e) {
       if (!mounted) return;
+      setState(() {
+        _finalizing = false;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('자동 녹화 종료 실패: $e')),
       );
@@ -686,9 +703,16 @@ class _RecordingScreenState extends State<RecordingScreen> {
 
   String _statusText() {
     if (_initializing) return '촬영 화면을 준비하고 있어요.';
-    if (_recording) return '건강한 쪽 팔로 천천히 움직여 주세요. (${_recordSeconds}초)';
-    if (_prepareSeconds > 0) return '준비해 주세요. (${_prepareSeconds})';
-    return '촬영을 마무리하고 있어요.';
+    if (_prepareSeconds > 0 && !_recording && !_finalizing) {
+      return '준비해 주세요. ($_prepareSeconds)';
+    }
+    if (_recording) {
+      return '건강한 쪽 팔로 천천히 움직여 주세요. (${_recordSeconds}초)';
+    }
+    if (_finalizing) {
+      return '촬영을 마무리하고 있어요.';
+    }
+    return '촬영을 준비하고 있어요.';
   }
 
   @override
@@ -714,86 +738,89 @@ class _RecordingScreenState extends State<RecordingScreen> {
         body: _initializing
             ? const Center(child: CircularProgressIndicator())
             : (c == null || !c.value.isInitialized)
-            ? const Center(child: Text('카메라를 사용할 수 없습니다.'))
-            : Column(
-          children: [
-            AppScaffoldBody(
-              safeBottom: false,
-              padding: EdgeInsets.fromLTRB(
-                Responsive.horizontalPadding(context),
-                12,
-                Responsive.horizontalPadding(context),
-                8,
-              ),
-              child: Column(
-                children: [
-                  StepHeader(
-                    step: 1,
-                    title: '건강한 쪽 움직임 촬영',
-                    subtitle: '건강한 쪽 팔로 ${_exerciseName(exerciseId)} 동작을 천천히 해 주세요.',
-                  ),
-                  const SizedBox(height: 10),
-                  StatusCard(
-                    text: _statusText(),
-                    trailing: _recording
-                        ? const Icon(Icons.fiber_manual_record, color: Colors.red)
-                        : null,
-                  ),
-                ],
-              ),
-            ),
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _PreviewFrame(
-                    aspectRatio: _cameraAspectRatioForScreen(context, c),
-                    child: CameraPreview(c),
-                  ),
-                  if (_prepareSeconds > 0 && !_recording)
-                    Center(
-                      child: Container(
-                        width: 120,
-                        height: 120,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.black.withOpacity(0.45),
+                ? const Center(child: Text('카메라를 사용할 수 없습니다.'))
+                : Column(
+                    children: [
+                      AppScaffoldBody(
+                        safeBottom: false,
+                        padding: EdgeInsets.fromLTRB(
+                          Responsive.horizontalPadding(context),
+                          12,
+                          Responsive.horizontalPadding(context),
+                          8,
                         ),
-                        child: Center(
-                          child: Text(
-                            '$_prepareSeconds',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 44,
-                              fontWeight: FontWeight.bold,
+                        child: Column(
+                          children: [
+                            StepHeader(
+                              step: 1,
+                              title: '건강한 쪽 움직임 촬영',
+                              subtitle:
+                                  '건강한 쪽 팔로 ${_exerciseName(exerciseId)} 동작을 천천히 해 주세요.',
+                            ),
+                            const SizedBox(height: 10),
+                            StatusCard(
+                              text: _statusText(),
+                              trailing: _recording
+                                  ? const Icon(
+                                      Icons.fiber_manual_record,
+                                      color: Colors.red,
+                                    )
+                                  : null,
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            _PreviewFrame(
+                              aspectRatio: _cameraAspectRatioForScreen(context, c),
+                              child: CameraPreview(c),
+                            ),
+                            if (_prepareSeconds > 0 && !_recording && !_finalizing)
+                              Center(
+                                child: Container(
+                                  width: 120,
+                                  height: 120,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.black.withOpacity(0.45),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      '$_prepareSeconds',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 44,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      SafeArea(
+                        top: false,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton(
+                              onPressed: _cancelExercise,
+                              child: const Text('운동 중단하기'),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-            ),
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: _cancelExercise,
-                    child: const Text('운동 중단하기'),
+                    ],
                   ),
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
 }
-
 class ReviewScreen extends StatefulWidget {
   const ReviewScreen({super.key});
 
@@ -820,21 +847,39 @@ class _ReviewScreenState extends State<ReviewScreen> {
     try {
       final data = _routeExtra(context);
       final path = data?['videoPath'] as String?;
+
+      debugPrint('================ REVIEW INIT START ================');
+      debugPrint('review extra: $data');
+      debugPrint('review videoPath: $path');
+
       if (path == null || path.isEmpty) {
         throw Exception('videoPath가 전달되지 않았습니다.');
       }
 
       final f = File(path);
+
+      debugPrint('review file exists: ${f.existsSync()}');
+
+      if (f.existsSync()) {
+        debugPrint('review file size: ${f.lengthSync()} bytes');
+      }
+
       if (!f.existsSync()) {
         throw Exception('영상 파일이 존재하지 않습니다: $path');
       }
 
       final controller = VideoPlayerController.file(f);
 
+      debugPrint('review controller created, initialize start');
+
       await controller.initialize().timeout(
         const Duration(seconds: 10),
         onTimeout: () => throw Exception('영상 초기화 시간이 초과되었습니다.'),
       );
+
+      debugPrint('review initialize success');
+      debugPrint('review duration: ${controller.value.duration.inMilliseconds} ms');
+      debugPrint('review aspectRatio: ${controller.value.aspectRatio}');
 
       await controller.setLooping(false);
       controller.addListener(_handleVideoProgress);
@@ -845,12 +890,19 @@ class _ReviewScreenState extends State<ReviewScreen> {
         _loading = false;
       });
 
+      await controller.play();
+
       await VoiceGuide.speak(
         '화면의 동작을 잘 관찰해 주세요. 이 영상은 건강한 쪽 움직임을 좌우반전한 모습입니다.',
       );
 
-      await controller.play();
-    } catch (e) {
+      debugPrint('review play start');
+      debugPrint('================ REVIEW INIT END =================');
+    } catch (e, st) {
+      debugPrint('================ REVIEW INIT ERROR ===============');
+      debugPrint('review init error: $e');
+      debugPrint('$st');
+
       if (!mounted) return;
       setState(() => _loading = false);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -870,14 +922,21 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final ended = position.inMilliseconds >= duration.inMilliseconds - 150;
     if (!ended) return;
 
+    debugPrint(
+      'review ended detected: playCount=$_playCount, '
+      'position=${position.inMilliseconds}, duration=${duration.inMilliseconds}',
+    );
+
     if (_playCount < _targetPlayCount - 1) {
       _playCount += 1;
       await vc.seekTo(Duration.zero);
       await vc.play();
       if (mounted) setState(() {});
+      debugPrint('review replay start: ${_playCount + 1} / $_targetPlayCount');
       return;
     }
 
+    debugPrint('review finished all repeats, go imitate');
     _goImitate();
   }
 
@@ -900,6 +959,8 @@ class _ReviewScreenState extends State<ReviewScreen> {
     if (_navigating) return;
     _navigating = true;
 
+    debugPrint('review go imitate start');
+
     await VoiceGuide.speak('이제 따라하기를 시작합니다.');
 
     final data = _routeExtra(context);
@@ -911,6 +972,9 @@ class _ReviewScreenState extends State<ReviewScreen> {
     final affectedSide = data?['affectedSide'] as String?;
     final exerciseId = data?['exerciseId'] as int?;
     final sessionUuid = data?['sessionUuid'] as String?;
+
+    debugPrint('review -> imitate videoPath: $path');
+    debugPrint('review -> imitate referenceVideoPath: $referenceVideoPath');
 
     if (path == null) return;
     if (!mounted) return;
@@ -941,7 +1005,6 @@ class _ReviewScreenState extends State<ReviewScreen> {
   @override
   Widget build(BuildContext context) {
     final vc = _vc;
-
 
     return PopScope(
       canPop: false,
@@ -975,84 +1038,82 @@ class _ReviewScreenState extends State<ReviewScreen> {
         body: _loading
             ? const Center(child: CircularProgressIndicator())
             : (vc == null || !vc.value.isInitialized)
-            ? const Center(child: Text('영상을 불러오지 못했습니다.'))
-            : SafeArea(
-          child: Column(
-            children: [
-              AppScaffoldBody(
-                safeBottom: false,
-                padding: EdgeInsets.fromLTRB(
-                  Responsive.horizontalPadding(context),
-                  12,
-                  Responsive.horizontalPadding(context),
-                  8,
-                ),
-                child: Column(
-                  children: [
-                    const StepHeader(
-                      step: 2,
-                      title: '좌우반전 영상 관찰',
-                      subtitle: '화면의 동작을 잘 관찰해 주세요. 영상은 2번 반복된 뒤 자동으로 다음 단계로 넘어갑니다.',
-                    ),
-                    const SizedBox(height: 10),
-                    StatusCard(
-                      text: '동작을 잘 관찰해 주세요.',
-                      trailing: Text(
-                        '${_playCount + 1} / $_targetPlayCount',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
+                ? const Center(child: Text('영상을 불러오지 못했습니다.'))
+                : SafeArea(
+                    child: Column(
+                      children: [
+                        AppScaffoldBody(
+                          safeBottom: false,
+                          padding: EdgeInsets.fromLTRB(
+                            Responsive.horizontalPadding(context),
+                            12,
+                            Responsive.horizontalPadding(context),
+                            8,
+                          ),
+                          child: Column(
+                            children: [
+                              const StepHeader(
+                                step: 2,
+                                title: '좌우반전 영상 관찰',
+                                subtitle:
+                                    '화면의 동작을 잘 관찰해 주세요. 영상은 2번 반복된 뒤 자동으로 다음 단계로 넘어갑니다.',
+                              ),
+                              const SizedBox(height: 10),
+                              StatusCard(
+                                text: '동작을 잘 관찰해 주세요.',
+                                trailing: Text(
+                                  '${_playCount + 1} / $_targetPlayCount',
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Center(
-                  child: AspectRatio(
-                    aspectRatio: vc.value.aspectRatio,
-                    child: Transform.flip(
-                      flipX: _mirror,
-                      child: VideoPlayer(vc),
+                        Expanded(
+                          child: Container(
+                            width: double.infinity,
+                            color: Colors.black,
+                            child: FittedBox(
+                              fit: BoxFit.contain,
+                              child: SizedBox(
+                                width: vc.value.size.width,
+                                height: vc.value.size.height,
+                                child: Transform.flip(
+                                  flipX: _mirror,
+                                  child: VideoPlayer(vc),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        bottomNavigationBar: SafeArea(
-          top: false,
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: Responsive.maxContentWidth(context),
-              ),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  Responsive.horizontalPadding(context),
-                  8,
-                  Responsive.horizontalPadding(context),
-                  16,
-                ),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _goImitate,
-                    child: const Text('바로 따라하기'),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
+       bottomNavigationBar: SafeArea(
+         top: false,
+         child: Padding(
+           padding: EdgeInsets.fromLTRB(
+             Responsive.horizontalPadding(context),
+             8,
+             Responsive.horizontalPadding(context),
+             16,
+           ),
+           child: SizedBox(
+             width: double.infinity,
+             child: ElevatedButton(
+               onPressed: _goImitate,
+               child: const Text('바로 따라하기'),
+             ),
+           ),
+         ),
+       ),
       ),
     );
   }
 }
-
 class ImitationScreen extends StatefulWidget {
   const ImitationScreen({super.key});
 
@@ -1418,25 +1479,22 @@ class _ImitationScreenState extends State<ImitationScreen> {
         ),
         bottomNavigationBar: SafeArea(
           top: false,
-          child: Align(
-            alignment: Alignment.topCenter,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              Responsive.horizontalPadding(context),
+              8,
+              Responsive.horizontalPadding(context),
+              16,
+            ),
             child: ConstrainedBox(
               constraints: BoxConstraints(
                 maxWidth: Responsive.maxContentWidth(context),
               ),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  Responsive.horizontalPadding(context),
-                  8,
-                  Responsive.horizontalPadding(context),
-                  16,
-                ),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: _cancelExercise,
-                    child: const Text('운동 중단하기'),
-                  ),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: _cancelExercise,
+                  child: const Text('운동 중단하기'),
                 ),
               ),
             ),
