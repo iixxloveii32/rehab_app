@@ -1080,10 +1080,25 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             runSpacing: 8,
             children: commands
                 .map(
-                  (cmd) => Chip(
-                label: Text(
+                  (cmd) => Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF2FF),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: const Color(0xFFC9DCF8),
+                  ),
+                ),
+                child: Text(
                   cmd,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF2F67B2),
+                  ),
                 ),
               ),
             )
@@ -1283,37 +1298,50 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
             ),
           ),
         )
-            : Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (!needsRetake && _hasMoreRepeats)
-                _repeatSummaryCard()
-              else
-                _resultSummaryCard(needsRetake),
-              const SizedBox(height: 16),
-              _voiceCommandCard(needsRetake),
-              const SizedBox(height: 16),
-              Text(
-                _hasMoreRepeats ? '이번 반복에서 확인한 점' : '세부 결과',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: ListView(
+            : LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight - 36,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (!needsRetake && _hasMoreRepeats)
+                      _repeatSummaryCard()
+                    else
+                      _resultSummaryCard(needsRetake),
+
+                    const SizedBox(height: 14),
+
+                    _voiceCommandCard(needsRetake),
+
+                    const SizedBox(height: 14),
+
+                    Text(
+                      _hasMoreRepeats ? '이번 반복에서 확인한 점' : '세부 결과',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+
+                    const SizedBox(height: 10),
+
                     _scoreTile(_labelForScore('rom'), _rom),
-                    const SizedBox(height: 10),
-                    _scoreTile(_labelForScore('compensation'), _compensation),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
+                    _scoreTile(
+                      _labelForScore('compensation'),
+                      _compensation,
+                    ),
+                    const SizedBox(height: 8),
                     _scoreTile(_labelForScore('symmetry'), _symmetry),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     _scoreTile(_labelForScore('smoothness'), _smoothness),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     _scoreTile(_labelForScore('timing'), _timing),
+
                     if (needsRetake) ...[
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(16),
@@ -1334,119 +1362,121 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                         ),
                       ),
                     ],
+
+                    const SizedBox(height: 16),
+
+                    if (!needsRetake && _hasMoreRepeats) ...[
+                      _repeatNextCard(),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _goNextRepeat,
+                          child: Text('$_nextRepeatNumber번째 따라하기 시작'),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: () {
+                            _autoTimer?.cancel();
+                            _stopListening();
+                            context.go('/exercise', extra: {
+                              'patientId': _patientId,
+                              'affectedSide': _affectedSide,
+                            });
+                          },
+                          child: const Text('운동 선택으로'),
+                        ),
+                      ),
+                    ] else if (!needsRetake && _hasRoutine) ...[
+                      _routineNextCard(nextRoutineExerciseId),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _goNextRoutineStep,
+                          child: Text(
+                            _isLastRoutineItem
+                                ? '결과 보기'
+                                : '${_exerciseName(nextRoutineExerciseId ?? 0)} 시작',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: () {
+                            _autoTimer?.cancel();
+                            _stopListening();
+                            context.go('/results', extra: {
+                              'patientId': _patientId,
+                              'sessionUuid': _sessionUuid,
+                              'affectedSide': _affectedSide,
+                            });
+                          },
+                          child: const Text('오늘 운동 종료'),
+                        ),
+                      ),
+                    ] else if (!needsRetake) ...[
+                      _recommendedNextCard(),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _goRecommendedExercise,
+                          child: Text(
+                            '${_exerciseName(_recommendedExerciseId())} 지금 시작',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: () {
+                            _autoTimer?.cancel();
+                            _stopListening();
+                            context.go('/exercise', extra: {
+                              'patientId': _patientId,
+                              'affectedSide': _affectedSide,
+                            });
+                          },
+                          child: const Text('운동 직접 선택'),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          onPressed: () {
+                            _autoTimer?.cancel();
+                            _stopListening();
+                            context.go('/results', extra: {
+                              'patientId': _patientId,
+                              'sessionUuid': _sessionUuid,
+                              'affectedSide': _affectedSide,
+                            });
+                          },
+                          child: const Text('오늘은 여기까지'),
+                        ),
+                      ),
+                    ] else ...[
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: _retryCurrentExercise,
+                          child: const Text('다시 시작하기'),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
-              if (!needsRetake && _hasMoreRepeats) ...[
-                _repeatNextCard(),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _goNextRepeat,
-                    child: Text('$_nextRepeatNumber번째 따라하기 시작'),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      _autoTimer?.cancel();
-                      _stopListening();
-                      context.go('/exercise', extra: {
-                        'patientId': _patientId,
-                        'affectedSide': _affectedSide,
-                      });
-                    },
-                    child: const Text('운동 선택으로'),
-                  ),
-                ),
-              ] else if (!needsRetake && _hasRoutine) ...[
-                _routineNextCard(nextRoutineExerciseId),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _goNextRoutineStep,
-                    child: Text(
-                      _isLastRoutineItem
-                          ? '결과 보기'
-                          : '${_exerciseName(nextRoutineExerciseId ?? 0)} 시작',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      _autoTimer?.cancel();
-                      _stopListening();
-                      context.go('/results', extra: {
-                        'patientId': _patientId,
-                        'sessionUuid': _sessionUuid,
-                        'affectedSide': _affectedSide,
-                      });
-                    },
-                    child: const Text('오늘 운동 종료'),
-                  ),
-                ),
-              ] else if (!needsRetake) ...[
-                _recommendedNextCard(),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _goRecommendedExercise,
-                    child: Text(
-                      '${_exerciseName(_recommendedExerciseId())} 지금 시작',
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      _autoTimer?.cancel();
-                      _stopListening();
-                      context.go('/exercise', extra: {
-                        'patientId': _patientId,
-                        'affectedSide': _affectedSide,
-                      });
-                    },
-                    child: const Text('운동 직접 선택'),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton(
-                    onPressed: () {
-                      _autoTimer?.cancel();
-                      _stopListening();
-                      context.go('/results', extra: {
-                        'patientId': _patientId,
-                        'sessionUuid': _sessionUuid,
-                        'affectedSide': _affectedSide,
-                      });
-                    },
-                    child: const Text('오늘은 여기까지'),
-                  ),
-                ),
-              ] else ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _retryCurrentExercise,
-                    child: const Text('다시 시작하기'),
-                  ),
-                ),
-              ],
-            ],
-          ),
+            );
+          },
         ),
       ),
     );

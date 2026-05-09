@@ -57,10 +57,12 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     final logs = await isar.sessionLogs.where().findAll();
 
     final screeningLogs = logs
-        .where((e) =>
-    e.patientId == patientId &&
-        e.sessionUuid.startsWith('screening_') &&
-        e.isReference == false)
+        .where(
+          (e) =>
+      e.patientId == patientId &&
+          e.sessionUuid.startsWith('screening_') &&
+          e.isReference == false,
+    )
         .toList();
 
     if (screeningLogs.isEmpty) return;
@@ -106,7 +108,7 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
       ) async {
     final repeatCount = await showModalBottomSheet<int>(
       context: context,
-      isScrollControlled: false,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _RepeatCountSheet(
         exerciseName: ex.name as String,
@@ -277,8 +279,9 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
                 height: Responsive.isTablet(context) ? 56 : 48,
                 decoration: BoxDecoration(
                   color: const Color(0xFFEAF2FF),
-                  borderRadius:
-                  BorderRadius.circular(Responsive.isTablet(context) ? 16 : 14),
+                  borderRadius: BorderRadius.circular(
+                    Responsive.isTablet(context) ? 16 : 14,
+                  ),
                 ),
                 child: const Icon(Icons.assignment_turned_in_outlined),
               ),
@@ -447,7 +450,7 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
       });
 
       await VoiceGuide.speak(
-        '반복할 횟수를 말씀해 주세요. 한 번, 두 번, 세 번 중에서 선택할 수 있어요.',
+        '반복할 횟수를 말씀해 주세요. 한번, 두번, 세번 중에서 선택할 수 있어요.',
       );
 
       if (_speechReady) {
@@ -467,6 +470,7 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
         await _speech.stop();
       }
     } catch (_) {}
+
     if (!mounted) return;
     setState(() {
       _listening = false;
@@ -479,6 +483,8 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
         .replaceAll('.', '')
         .replaceAll(',', '')
         .replaceAll('\n', '')
+        .replaceAll('회만', '회')
+        .replaceAll('번만', '번')
         .trim()
         .toLowerCase();
   }
@@ -488,27 +494,33 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
 
     if (normalized.contains('한번') ||
         normalized.contains('1번') ||
+        normalized.contains('일번') ||
         normalized == '1' ||
         normalized.contains('한개') ||
         normalized.contains('한회') ||
+        normalized.contains('일회') ||
         normalized.contains('1회')) {
       return 1;
     }
 
     if (normalized.contains('두번') ||
         normalized.contains('2번') ||
+        normalized.contains('이번') ||
         normalized == '2' ||
         normalized.contains('두개') ||
         normalized.contains('두회') ||
+        normalized.contains('이회') ||
         normalized.contains('2회')) {
       return 2;
     }
 
     if (normalized.contains('세번') ||
         normalized.contains('3번') ||
+        normalized.contains('삼번') ||
         normalized == '3' ||
         normalized.contains('세개') ||
         normalized.contains('세회') ||
+        normalized.contains('삼회') ||
         normalized.contains('3회')) {
       return 3;
     }
@@ -540,6 +552,7 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
         pauseFor: const Duration(seconds: 3),
         partialResults: true,
         cancelOnError: true,
+        localeId: 'ko_KR',
       );
     } catch (_) {
       if (!mounted) return;
@@ -549,12 +562,41 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
     }
   }
 
-  Widget _countButton(int count) {
+  Widget _countButton(int count, String voiceText) {
     return SizedBox(
-      width: double.infinity,
+      width: 96,
+      height: 56,
       child: ElevatedButton(
         onPressed: () => Navigator.of(context).pop(count),
-        child: Text('$count회'),
+        style: ElevatedButton.styleFrom(
+          elevation: 0,
+          backgroundColor: const Color(0xFF4F8DF7),
+          foregroundColor: Colors.white,
+          padding: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '$count회',
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 1),
+            Text(
+              voiceText,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -571,144 +613,205 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
           constraints: BoxConstraints(
             maxWidth: Responsive.maxContentWidth(context),
           ),
-          child: Container(
-            margin: EdgeInsets.all(Responsive.horizontalPadding(context)),
-            padding: EdgeInsets.all(isTablet ? 24 : 20),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(28),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.exerciseName,
-                  style: TextStyle(
-                    fontSize: Responsive.largeTitleFontSize(context) - 2,
-                    fontWeight: FontWeight.w800,
+            child: Container(
+              margin: EdgeInsets.all(Responsive.horizontalPadding(context)),
+              padding: EdgeInsets.all(isTablet ? 22 : 16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(28),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.exerciseName,
+                    style: TextStyle(
+                      fontSize: Responsive.largeTitleFontSize(context) - 5,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '반복할 횟수를 선택해 주세요.',
-                  style: TextStyle(
-                    fontSize: Responsive.bodyFontSize(context),
-                    fontWeight: FontWeight.w600,
+                  const SizedBox(height: 6),
+                  Text(
+                    '반복할 횟수를 선택해 주세요.',
+                    style: TextStyle(
+                      fontSize: Responsive.bodyFontSize(context),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF7FAFF),
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: const Color(0xFFDCE6F2)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.mic_none_rounded),
-                          const SizedBox(width: 8),
-                          const Expanded(
-                            child: Text(
-                              '말로도 선택할 수 있어요',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w800,
-                              ),
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF7FAFF),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: const Color(0xFFDCE6F2),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.mic_none_rounded,
+                              size: 20,
                             ),
-                          ),
-                          if (_speechReady)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: _listening
-                                    ? const Color(0xFFEAF7EE)
-                                    : const Color(0xFFF1F4F8),
-                                borderRadius: BorderRadius.circular(999),
-                              ),
+                            const SizedBox(width: 8),
+                            const Expanded(
                               child: Text(
-                                _listening ? '듣는 중' : '대기',
+                                '말로도 선택할 수 있어요',
                                 style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: _listening
-                                      ? const Color(0xFF3FAE6F)
-                                      : const Color(0xFF5B6676),
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w800,
                                 ),
                               ),
                             ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: const [
-                          Chip(label: Text('한 번')),
-                          Chip(label: Text('두 번')),
-                          Chip(label: Text('세 번')),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        _speechReady
-                            ? '한 번, 두 번, 세 번 중에서 말씀해 주세요.'
-                            : '이 기기에서는 음성 인식을 사용할 수 없어요.',
-                        style: TextStyle(
-                          fontSize: Responsive.bodyFontSize(context) - 1,
-                          height: 1.4,
+                            if (_speechReady)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: _listening
+                                      ? const Color(0xFFEAF7EE)
+                                      : const Color(0xFFF1F4F8),
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  _listening ? '듣는 중' : '대기',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: _listening
+                                        ? const Color(0xFF3FAE6F)
+                                        : const Color(0xFF5B6676),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
-                      ),
-                      if (_lastWords.isNotEmpty) ...[
                         const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: const [
+                            _VoiceCommandPill(text: '한번'),
+                            _VoiceCommandPill(text: '두번'),
+                            _VoiceCommandPill(text: '세번'),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
                         Text(
-                          '인식된 말: $_lastWords',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF5B6676),
+                          _speechReady
+                              ? '한번, 두번, 세번 중에서 말씀해 주세요.'
+                              : '이 기기에서는 음성 인식을 사용할 수 없어요.',
+                          style: TextStyle(
+                            fontSize: Responsive.bodyFontSize(context) - 2,
+                            height: 1.3,
                           ),
                         ),
-                      ],
-                      if (_speechReady) ...[
-                        const SizedBox(height: 12),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            onPressed: _startListening,
-                            icon: Icon(_listening ? Icons.mic : Icons.mic_none),
-                            label: Text(_listening ? '듣는 중' : '음성으로 선택하기'),
+                        if (_lastWords.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            '인식된 말: $_lastWords',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF5B6676),
+                            ),
                           ),
-                        ),
+                        ],
+                        if (_speechReady) ...[
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _startListening,
+                              icon: Icon(
+                                _listening ? Icons.mic : Icons.mic_none,
+                                size: 18,
+                              ),
+                              label: Text(
+                                _listening ? '듣는 중' : '음성으로 선택하기',
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                _countButton(1),
-                const SizedBox(height: 10),
-                _countButton(2),
-                const SizedBox(height: 10),
-                _countButton(3),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('취소'),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        _countButton(1, '한번'),
+                        _countButton(2, '두번'),
+                        _countButton(3, '세번'),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: const Text('취소'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VoiceCommandPill extends StatelessWidget {
+  final String text;
+
+  const _VoiceCommandPill({
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(
+        minWidth: 58,
+        minHeight: 32,
+      ),
+      padding: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 7,
+      ),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF2FF),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: const Color(0xFFC9DCF8),
+        ),
+      ),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w800,
+          color: Color(0xFF2F67B2),
         ),
       ),
     );

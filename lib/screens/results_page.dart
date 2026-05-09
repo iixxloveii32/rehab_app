@@ -198,59 +198,82 @@ class _ResultsPageState extends State<ResultsPage> {
           ),
         )
             : todayLogs.isEmpty
-            ? const Center(
-          child: Text(
-            '오늘의 운동 결과를 찾을 수 없습니다.',
-            style: TextStyle(fontSize: 17),
+            ? AppScaffoldBody(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.assignment_outlined,
+                size: 72,
+                color: Color(0xFF8A96A8),
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                '오늘의 운동 결과를 찾을 수 없습니다.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _goToExerciseOrPatientList,
+                  child: const Text('운동 화면으로 돌아가기'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () {
+                    context.go('/patient-list');
+                  },
+                  child: const Text('사용자 선택으로'),
+                ),
+              ),
+            ],
           ),
         )
             : AppScaffoldBody(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _CompletionCard(
-                totalExercises: totalExercises,
-                avgScore: avgScore,
-                bestScore: bestScore,
-                comment: _overallComment(avgScore),
-              ),
-              SizedBox(height: Responsive.sectionSpacing(context)),
-              Text(
-                '운동별 결과',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: ListView(
-                  children: [
-                    if (isTablet)
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: List.generate(todayLogs.length, (index) {
-                          final log = todayLogs[index];
-                          return SizedBox(
-                            width: (Responsive.maxContentWidth(context) - 12) / 2,
-                            child: _ExerciseResultCard(
-                              index: index + 1,
-                              title: _exerciseName(log.exerciseId),
-                              score: log.overall.toInt(),
-                              symmetry: log.symmetry.toInt(),
-                              timing: log.timing.toInt(),
-                              smoothness: log.smoothness.toInt(),
-                              compensation: log.compensation.toInt(),
-                              rom: log.rom.toInt(),
-                              comment: _exerciseComment(log.overall),
-                              scoreColor: _scoreColor(log.overall),
-                            ),
-                          );
-                        }),
-                      )
-                    else
-                      ...List.generate(todayLogs.length, (index) {
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _CompletionCard(
+                  totalExercises: totalExercises,
+                  avgScore: avgScore,
+                  bestScore: bestScore,
+                  comment: _overallComment(avgScore),
+                ),
+
+                SizedBox(
+                  height: Responsive.sectionSpacing(context),
+                ),
+
+                Text(
+                  '운동별 결과',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+
+                const SizedBox(height: 10),
+
+                if (isTablet)
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: List.generate(
+                      todayLogs.length,
+                          (index) {
                         final log = todayLogs[index];
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
+
+                        return SizedBox(
+                          width:
+                          (Responsive.maxContentWidth(context) -
+                              12) /
+                              2,
                           child: _ExerciseResultCard(
                             index: index + 1,
                             title: _exerciseName(log.exerciseId),
@@ -258,71 +281,80 @@ class _ResultsPageState extends State<ResultsPage> {
                             symmetry: log.symmetry.toInt(),
                             timing: log.timing.toInt(),
                             smoothness: log.smoothness.toInt(),
-                            compensation: log.compensation.toInt(),
+                            compensation:
+                            log.compensation.toInt(),
                             rom: log.rom.toInt(),
-                            comment: _exerciseComment(log.overall),
-                            scoreColor: _scoreColor(log.overall),
+                            comment:
+                            _exerciseComment(log.overall),
+                            scoreColor:
+                            _scoreColor(log.overall),
                           ),
                         );
-                      }),
-                    if (_bestLog != null && _lowestLog != null) ...[
-                      const SizedBox(height: 12),
-                      _InsightCard(
-                        bestTitle: _exerciseName(_bestLog!.exerciseId),
-                        bestScore: _bestLog!.overall,
-                        needTitle: _exerciseName(_lowestLog!.exerciseId),
-                        needScore: _lowestLog!.overall,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        bottomNavigationBar: (!loading && error == null)
-            ? SafeArea(
-          top: false,
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: Responsive.maxContentWidth(context),
-              ),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  Responsive.horizontalPadding(context),
-                  8,
-                  Responsive.horizontalPadding(context),
-                  16,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _goToExerciseOrPatientList,
-                        child: const Text('다시 운동하기'),
-                      ),
+                      },
                     ),
-                    const SizedBox(height: 10),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton(
-                        onPressed: () {
-                          context.go('/patient-list');
-                        },
-                        child: const Text('사용자 선택으로'),
+                  )
+                else
+                  ...List.generate(todayLogs.length, (index) {
+                    final log = todayLogs[index];
+
+                    return Padding(
+                      padding:
+                      const EdgeInsets.only(bottom: 12),
+                      child: _ExerciseResultCard(
+                        index: index + 1,
+                        title: _exerciseName(log.exerciseId),
+                        score: log.overall.toInt(),
+                        symmetry: log.symmetry.toInt(),
+                        timing: log.timing.toInt(),
+                        smoothness: log.smoothness.toInt(),
+                        compensation:
+                        log.compensation.toInt(),
+                        rom: log.rom.toInt(),
+                        comment: _exerciseComment(log.overall),
+                        scoreColor: _scoreColor(log.overall),
                       ),
-                    ),
-                  ],
+                    );
+                  }),
+
+                if (_bestLog != null && _lowestLog != null) ...[
+                  const SizedBox(height: 12),
+                  _InsightCard(
+                    bestTitle:
+                    _exerciseName(_bestLog!.exerciseId),
+                    bestScore: _bestLog!.overall,
+                    needTitle:
+                    _exerciseName(_lowestLog!.exerciseId),
+                    needScore: _lowestLog!.overall,
+                  ),
+                ],
+
+                const SizedBox(height: 20),
+
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _goToExerciseOrPatientList,
+                    child: const Text('다시 운동하기'),
+                  ),
                 ),
-              ),
+
+                const SizedBox(height: 10),
+
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () {
+                      context.go('/patient-list');
+                    },
+                    child: const Text('사용자 선택으로'),
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+              ],
             ),
           ),
-        )
-            : null,
+        ),
       ),
     );
   }

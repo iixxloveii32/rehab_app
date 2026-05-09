@@ -1,6 +1,11 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:isar/isar.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../helpers/patient_progress_helper.dart';
 import '../models/patient.dart';
@@ -39,9 +44,8 @@ class _PatientListScreenState extends State<PatientListScreen> {
 
       for (final patient in patients) {
         final patientLogs =
-            logs.where((e) => e.patientId == patient.id).toList();
-        progressMap[patient.id] =
-            PatientProgressHelper.fromLogs(patientLogs);
+        logs.where((e) => e.patientId == patient.id).toList();
+        progressMap[patient.id] = PatientProgressHelper.fromLogs(patientLogs);
       }
 
       patients.sort((a, b) => b.id.compareTo(a.id));
@@ -59,6 +63,182 @@ class _PatientListScreenState extends State<PatientListScreen> {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+
+  String _csvEscape(dynamic value) {
+    final text = (value ?? '').toString();
+    final escaped = text.replaceAll('"', '""');
+
+    if (escaped.contains(',') ||
+        escaped.contains('\n') ||
+        escaped.contains('\r') ||
+        escaped.contains('"')) {
+      return '"$escaped"';
+    }
+
+    return escaped;
+  }
+
+  String _dateTimeLabel(DateTime? dt) {
+    if (dt == null) return '';
+    final y = dt.year.toString().padLeft(4, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    final s = dt.second.toString().padLeft(2, '0');
+    return '$y-$m-$d $h:$min:$s';
+  }
+
+  String _dateOnlyLabel(DateTime? dt) {
+    if (dt == null) return '';
+    final y = dt.year.toString().padLeft(4, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  String _safeFileName(String value) {
+    return value
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        .replaceAll(' ', '_')
+        .trim();
+  }
+
+  Future<void> _exportPatientCsv(Patient patient) async {
+    try {
+      final isar = IsarDB.instance;
+
+      final logs = await isar.sessionLogs
+          .filter()
+          .patientIdEqualTo(patient.id)
+          .findAll();
+
+      logs.sort((a, b) => a.timestampKst.compareTo(b.timestampKst));
+
+      if (logs.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${patient.name}님의 저장된 운동 기록이 없습니다.'),
+          ),
+        );
+        return;
+      }
+
+      final headers = <String>[
+        'patientId',
+        'patientName',
+        'sex',
+        'birthDate',
+        'affectedSide',
+        'logId',
+        'sessionUuid',
+        'dateKey',
+        'timestampKst',
+        'exerciseId',
+        'exerciseName',
+        'isReference',
+        'attemptIndex',
+        'overall',
+        'symmetry',
+        'timing',
+        'smoothness',
+        'compensation',
+        'rom',
+        'appVersion',
+        'scoreSchemaVersion',
+        'referenceVideoPath',
+        'imitationVideoPath',
+        'qualityJson',
+        'featuresJson',
+      ];
+
+      final rows = <List<dynamic>>[
+        headers,
+        ...logs.map(
+              (log) => <dynamic>[
+            patient.id,
+            patient.name,
+            _sexLabel(patient.sex),
+            _dateOnlyLabel(patient.birthDate),
+            _sideLabel(patient.affectedSide),
+            log.id,
+            log.sessionUuid,
+            log.dateKey,
+            _dateTimeLabel(log.timestampKst),
+            log.exerciseId,
+            _exerciseNameForCsv(log.exerciseId),
+            log.isReference ? 'reference' : 'imitation',
+            log.attemptIndex,
+            log.overall,
+            log.symmetry,
+            log.timing,
+            log.smoothness,
+            log.compensation,
+            log.rom,
+            log.appVersion,
+            log.scoreSchemaVersion,
+            log.referenceVideoPath ?? '',
+            log.imitationVideoPath ?? '',
+            log.qualityJson ?? '',
+            log.featuresJson ?? '',
+          ],
+        ),
+      ];
+
+      final csv = rows
+          .map((row) => row.map(_csvEscape).join(','))
+          .join('\r\n');
+
+      // Excel 한글 깨짐 방지용 UTF-8 BOM
+      final csvWithBom = '\uFEFF$csv';
+
+      final dir = await getTemporaryDirectory();
+      final now = DateTime.now();
+      final datePart =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}';
+      final fileName =
+          'rehab_${_safeFileName(patient.name)}_${patient.id}_$datePart.csv';
+      final file = File('${dir.path}/$fileName');
+
+      await file.writeAsString(csvWithBom, encoding: utf8);
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        subject: '${patient.name} 재활 운동 기록 CSV',
+        text: '${patient.name}님의 재활 운동 기록 CSV 파일입니다.',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('CSV 내보내기 실패: $e')),
+      );
+    }
+  }
+
+  String _exerciseNameForCsv(int id) {
+    switch (id) {
+      case 0:
+        return '팔 앞으로 들기';
+      case 1:
+        return '팔 옆으로 들기';
+      case 2:
+        return '머리 만지기';
+      case 3:
+        return '허리 뒤로 손 가져가기';
+      case 4:
+        return '앞으로 손 뻗기';
+      case 5:
+        return '옆으로 손 뻗기';
+      case 6:
+        return '팔 굽히기';
+      case 7:
+        return '팔 펴기';
+      default:
+        return '운동';
     }
   }
 
@@ -160,55 +340,6 @@ class _PatientListScreenState extends State<PatientListScreen> {
         : const Color(0xFFE0A63E);
   }
 
-  Widget _emptyView() {
-    return Center(
-      child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: Responsive.horizontalPadding(context),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.people_alt_outlined,
-              size: Responsive.isTablet(context) ? 96 : 72,
-              color: const Color(0xFFB8C2CC),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '등록된 사용자가 없습니다.',
-              style: TextStyle(
-                fontSize: Responsive.isTablet(context) ? 24 : 20,
-                fontWeight: FontWeight.w800,
-                color: const Color(0xFF2F3A4A),
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '새 사용자를 등록한 뒤 운동을 시작해 주세요.',
-              style: TextStyle(
-                fontSize: Responsive.isTablet(context) ? 16 : 14,
-                color: const Color(0xFF667085),
-                height: 1.5,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _goToNewPatient,
-                icon: const Icon(Icons.person_add),
-                label: const Text('새 사용자 등록하기'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final isTablet = Responsive.isTablet(context);
@@ -227,47 +358,82 @@ class _PatientListScreenState extends State<PatientListScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : (_error != null)
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(
-                      '오류: $_error',
-                      style: const TextStyle(fontSize: 16),
-                    ),
-                  ),
-                )
-              : AppScaffoldBody(
-                  child: _patients.isEmpty
-                      ? _emptyView()
-                      : _patientList(isTablet),
-                ),
-      bottomNavigationBar: _patients.isEmpty
-          ? null
-          : SafeArea(
+          ? Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Text(
+            '오류: $_error',
+            style: const TextStyle(fontSize: 16),
+          ),
+        ),
+      )
+          : AppScaffoldBody(
+        child: Column(
+          children: [
+            Expanded(
+              child: _patients.isEmpty
+                  ? _emptyView()
+                  : _patientList(isTablet),
+            ),
+            const SizedBox(height: 12),
+            SafeArea(
               top: false,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  Responsive.horizontalPadding(context),
-                  8,
-                  Responsive.horizontalPadding(context),
-                  16,
-                ),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _goToNewPatient,
-                    icon: const Icon(Icons.person_add),
-                    label: const Text('새 사용자 등록하기'),
-                  ),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _goToNewPatient,
+                  icon: const Icon(Icons.person_add),
+                  label: const Text('새 사용자 등록하기'),
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyView() {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(Responsive.isTablet(context) ? 28 : 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.person_outline,
+              size: Responsive.isTablet(context) ? 84 : 72,
+              color: const Color(0xFF8A96A8),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              '등록된 사용자가 없습니다',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: Responsive.largeTitleFontSize(context) - 4,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '새 사용자를 등록한 뒤 재활 운동을 시작할 수 있어요.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: Responsive.bodyFontSize(context),
+                color: const Color(0xFF5B6676),
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _patientList(bool isTablet) {
     if (isTablet) {
       return GridView.builder(
+        padding: const EdgeInsets.only(bottom: 8),
         itemCount: _patients.length,
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
@@ -277,37 +443,18 @@ class _PatientListScreenState extends State<PatientListScreen> {
         ),
         itemBuilder: (context, index) {
           final p = _patients[index];
-          final progress = _progressMap[p.id] ??
-              const PatientProgressSummary(
-                level: 1,
-                totalSessions: 0,
-                weeklySessions: 0,
-                totalPoints: 0,
-                badges: [],
-                statusLabel: '시작 전',
-                latestFeedback: '첫 운동을 시작해 보세요.',
-                completedToday: false,
-              );
+          final progress = _progressMap[p.id] ?? _defaultProgress();
           return _patientCard(p, progress);
         },
       );
     }
 
     return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 8),
       itemCount: _patients.length,
       itemBuilder: (context, index) {
         final p = _patients[index];
-        final progress = _progressMap[p.id] ??
-            const PatientProgressSummary(
-              level: 1,
-              totalSessions: 0,
-              weeklySessions: 0,
-              totalPoints: 0,
-              badges: [],
-              statusLabel: '시작 전',
-              latestFeedback: '첫 운동을 시작해 보세요.',
-              completedToday: false,
-            );
+        final progress = _progressMap[p.id] ?? _defaultProgress();
 
         return Padding(
           padding: const EdgeInsets.only(bottom: 12),
@@ -317,10 +464,23 @@ class _PatientListScreenState extends State<PatientListScreen> {
     );
   }
 
+  PatientProgressSummary _defaultProgress() {
+    return const PatientProgressSummary(
+      level: 1,
+      totalSessions: 0,
+      weeklySessions: 0,
+      totalPoints: 0,
+      badges: [],
+      statusLabel: '시작 전',
+      latestFeedback: '첫 운동을 시작해 보세요.',
+      completedToday: false,
+    );
+  }
+
   Widget _patientCard(Patient p, PatientProgressSummary progress) {
     final badges = progress.badges.take(3).toList();
     final extraBadgeCount =
-        progress.badges.length > 3 ? progress.badges.length - 3 : 0;
+    progress.badges.length > 3 ? progress.badges.length - 3 : 0;
 
     return InkWell(
       onTap: () => _selectPatient(p),
@@ -422,7 +582,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
                 runSpacing: 8,
                 children: [
                   ...badges.map(
-                    (badge) => Container(
+                        (badge) => Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
                         vertical: 8,
@@ -477,6 +637,15 @@ class _PatientListScreenState extends State<PatientListScreen> {
                   fontWeight: FontWeight.w600,
                   color: const Color(0xFF455468),
                 ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _exportPatientCsv(p),
+                icon: const Icon(Icons.file_download_outlined),
+                label: const Text('CSV 내보내기'),
               ),
             ),
           ],
