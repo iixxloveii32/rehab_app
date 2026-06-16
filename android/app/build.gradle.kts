@@ -7,7 +7,10 @@ plugins {
 
 android {
     namespace = "com.example.rehab_app"
-    compileSdk = flutter.compileSdkVersion
+
+    // android:attr/lStar not found 오류 해결을 위해 compileSdk를 명시적으로 올림
+    compileSdk = 35
+
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -20,21 +23,28 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        // TODO: 정식 배포 전에는 고유한 applicationId로 변경 권장
         applicationId = "com.example.rehab_app"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+
+        // Isar 및 최신 Android 리소스 호환성을 위해 minSdk를 명시
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+
+        // 교수님 검토용 APK 빌드 기준
+        targetSdk = 35
+
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // 교수님 검토용 APK: 우선 debug signing으로 release APK 생성
+            // Play Store 배포 시에는 별도 release signingConfig 설정 필요
             signingConfig = signingConfigs.getByName("debug")
+
+            // 현재는 난독화/리소스 축소 비활성화
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
