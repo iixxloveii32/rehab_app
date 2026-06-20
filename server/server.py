@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Tuple
 
 app = FastAPI()
 mp_pose = mp.solutions.pose
+mp_hands = mp.solutions.hands
 
 
 # =========================================================
@@ -261,15 +262,15 @@ EXERCISES = {
         "algo": "hand_to_back_v5",
     },
     4: {
-        "name": "앞 물건 잡기",
+        "name": "앞으로 손 뻗기",
         "code": "reach_forward",
-        "label": "앞 물건 잡기",
+        "label": "앞으로 손 뻗기",
         "algo": "reach_forward_v5",
     },
     5: {
-        "name": "옆 물건 잡기",
+        "name": "옆으로 손 뻗기",
         "code": "reach_side",
-        "label": "옆 물건 잡기",
+        "label": "옆으로 손 뻗기",
         "algo": "reach_side_v5",
     },
     6: {
@@ -1450,6 +1451,161 @@ def score_elbow_extension(
     return scores, features, quality_json
 
 
+
+# =========================================================
+# task-oriented repetition counting helpers
+# =========================================================
+def _count_repetitions_from_series(
+    series: List[float],
+    *,
+    min_amplitude: float = 0.08,
+    min_frames_between_counts: int = 3,
+) -> int:
+    """
+    READY -> REACHED -> READY state machine.
+    Dynamic thresholds are used so the first server version is tolerant of
+    patient-specific range differences and camera placement.
+    """
+    if not series or len(series) < 6:
+        return 0
+
+    arr = np.array(series, dtype=np.float32)
+    arr = arr[np.isfinite(arr)]
+    if len(arr) < 6:
+        return 0
+
+    # light smoothing to reduce one-frame jitter
+    if len(arr) >= 5:
+        kernel = np.ones(3, dtype=np.float32) / 3.0
+        arr = np.convolve(arr, kernel, mode="same")
+
+    mn = float(np.percentile(arr, 10))
+    mx = float(np.percentile(arr, 90))
+    amp = mx - mn
+
+    if amp < min_amplitude:
+        return 0
+
+    low_thr = mn + 0.35 * amp
+    high_thr = mn + 0.70 * amp
+
+    state = "ready"
+    count = 0
+    last_count_idx = -9999
+
+    for i, v in enumerate(arr):
+        value = float(v)
+
+        if state == "ready":
+            if value >= high_thr:
+                state = "reached"
+
+        elif state == "reached":
+            if value <= low_thr:
+                if i - last_count_idx >= min_frames_between_counts:
+                    count += 1
+                    last_count_idx = i
+                state = "ready"
+
+    return int(count)
+
+
+def _task_series_for_exercise(
+    imi: Dict[str, Any],
+    exerciseId: int,
+    affectedSide: str,
+) -> Tuple[List[float], str, float]:
+    aff, _ = _affected_unaffected_side_names(affectedSide)
+    series = imi.get("_series", {})
+
+    if exerciseId in (0, 1):
+        # Shoulder flexion / abduction: shoulder elevation angle increases.
+        return series.get(f"{aff}ShoulderElev", []), f"{aff}ShoulderElev", 12.0
+
+    if exerciseId == 2:
+        # Hand to head: smaller wrist-head distance is better, so use inverted distance.
+        return series.get(f"{aff}WristToHeadInv", []), f"{aff}WristToHeadInv", 0.08
+
+    if exerciseId == 3:
+        # Hand to back: 2D/3D proxy is imperfect; wrist-to-hip inverted distance is the most stable proxy.
+        return series.get(f"{aff}WristToHipInv", []), f"{aff}WristToHipInv", 0.08
+
+    if exerciseId == 4:
+        # Forward reach: z-axis reach can be weak on phone video.
+        # Use reach-forward if detectable; otherwise fall back to shoulder elevation.
+        fwd = series.get(f"{aff}ReachForward", [])
+        if fwd:
+            arr = np.array(fwd, dtype=np.float32)
+            if len(arr) >= 6 and float(np.nanpercentile(arr, 90) - np.nanpercentile(arr, 10)) >= 0.03:
+                return fwd, f"{aff}ReachForward", 0.03
+        return series.get(f"{aff}ShoulderElev", []), f"{aff}ShoulderElev_fallback", 12.0
+
+    if exerciseId == 5:
+        return series.get(f"{aff}ReachSide", []), f"{aff}ReachSide", 0.08
+
+    if exerciseId == 6:
+        # Elbow flexion: elbow angle decreases; convert to flexion amount.
+        elbow = series.get(f"{aff}ElbowFlex", [])
+        return [max(0.0, 180.0 - float(x)) for x in elbow], f"{aff}ElbowFlexInv", 12.0
+
+    if exerciseId == 7:
+        # Elbow extension: elbow angle increases.
+        return series.get(f"{aff}ElbowFlex", []), f"{aff}ElbowExtensionProxy", 12.0
+
+    return [], "unknown", 0.08
+
+
+def _calculate_task_payload(
+    *,
+    exerciseId: int,
+    affectedSide: str,
+    imi: Dict[str, Any],
+    scores: Dict[str, int],
+    quality: Dict[str, Any],
+    taskTargetCount: int,
+    taskStandardVersion: str,
+    scoreSchemaVersion: int,
+    appVersion: str,
+) -> Dict[str, Any]:
+    target = max(1, int(taskTargetCount or 5))
+
+    # If the base quality logic says retake, do not reward task success.
+    if quality.get("needsRetake") is True:
+        success_count = 0
+        series_key = "skipped_needs_retake"
+        series_frames = 0
+    else:
+        task_series, series_key, min_amp = _task_series_for_exercise(
+            imi,
+            exerciseId,
+            affectedSide,
+        )
+        series_frames = len(task_series)
+        success_count = _count_repetitions_from_series(
+            task_series,
+            min_amplitude=min_amp,
+            min_frames_between_counts=3,
+        )
+
+    success_rate = float(success_count) / float(target)
+    task_score = min(success_rate * 100.0, 100.0)
+    final_score = float(scores.get("overall", 0)) * 0.7 + task_score * 0.3
+
+    return {
+        "taskTargetCount": target,
+        "taskSuccessCount": int(success_count),
+        "taskSuccessRate": round(success_rate, 4),
+        "taskScore": round(task_score, 2),
+        "finalTaskOrientedScore": round(final_score, 2),
+        "taskStandardVersion": taskStandardVersion,
+        "taskScoreSchemaVersion": int(scoreSchemaVersion),
+        "appVersion": appVersion,
+        "taskCountAlgo": "task_count_state_machine_v1",
+        "taskSeriesKey": series_key,
+        "taskSeriesFrames": int(series_frames),
+    }
+
+
 # =========================================================
 # response helper
 # =========================================================
@@ -1459,8 +1615,19 @@ def _build_response(
     scores: Dict[str, int],
     features: Dict[str, Any],
     quality: Dict[str, Any],
+    task_payload: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     ex = EXERCISES[exerciseId]
+    task_payload = task_payload or {}
+
+    # keep task details both at top level for Flutter parsing
+    # and inside features for later CSV / debugging.
+    if task_payload:
+        features = {
+            **features,
+            "task": task_payload,
+        }
+
     return {
         "exerciseId": exerciseId,
         "exerciseName": ex["name"],
@@ -1468,20 +1635,565 @@ def _build_response(
         "exerciseCode": ex["code"],
         "affectedSide": affectedSide,
         **scores,
+        **task_payload,
         "features": features,
         "quality": quality,
     }
 
+# =========================================================
+# screening helpers / extraction / scoring
+# =========================================================
+def _screening_quality(mean_visibility: float, frames_used: int) -> float:
+    return _clamp01(mean_visibility / 0.7) * _clamp01(frames_used / 30.0)
+
+
+def _screening_quality_json(
+    *,
+    algo: str,
+    mean_visibility: float,
+    frames_used: int,
+    proxy_only: bool = False,
+) -> Dict[str, Any]:
+    quality = _screening_quality(mean_visibility, frames_used)
+    needs_retake = (mean_visibility < 0.35) or (frames_used < 12)
+
+    return {
+        "analysisStatus": "done",
+        "needsRetake": needs_retake,
+        "reason": None if not needs_retake else "low_visibility_or_too_few_frames",
+        "meanVisibility": mean_visibility,
+        "framesUsed": frames_used,
+        "proxyOnly": proxy_only,
+        "algo": algo,
+    }
+
+
+def _screening_compensation_score(trunk_lean_max: float, shrug_ratio_mean: float) -> float:
+    trunk_pen = max(0.0, trunk_lean_max - 10.0) * 3.0
+    shrug_pen = max(0.0, shrug_ratio_mean - 0.32) * 150.0
+    return _clamp(100.0 - trunk_pen - shrug_pen, 0.0, 100.0)
+
+
+def _vector_angle_series(video_path: str, affectedSide: str, stride: int = 4, max_frames: int = 240) -> List[float]:
+    """
+    forearm proxy:
+    affected side의 elbow->wrist 벡터의 영상 평면 각도 변화를 이용해 회내/회외를 매우 거칠게 추정
+    (pose 기반 proxy이므로 정확도는 낮음)
+    """
+    cap = cv2.VideoCapture(video_path)
+    pose = mp_pose.Pose(
+        static_image_mode=False,
+        model_complexity=1,
+        enable_segmentation=False,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+
+    aff, _ = _affected_unaffected_side_names(affectedSide)
+
+    if aff == "left":
+        EL, WR = 13, 15
+    else:
+        EL, WR = 14, 16
+
+    series: List[float] = []
+    frame_idx = 0
+    used = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_idx += 1
+        if frame_idx % stride != 0:
+            continue
+        used += 1
+        if used > max_frames:
+            break
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        res = pose.process(rgb)
+        if not res.pose_landmarks:
+            continue
+
+        lm = res.pose_landmarks.landmark
+        ex, ey = lm[EL].x, lm[EL].y
+        wx, wy = lm[WR].x, lm[WR].y
+        vx, vy = wx - ex, wy - ey
+
+        if abs(vx) < 1e-6 and abs(vy) < 1e-6:
+            continue
+
+        ang = math.degrees(math.atan2(vy, vx))
+        series.append(float(ang))
+
+    cap.release()
+    pose.close()
+
+    if len(series) < 2:
+        return series
+
+    arr = np.unwrap(np.radians(np.array(series, dtype=np.float32)))
+    return [float(x) for x in np.degrees(arr)]
+
+
+def _hand_open_series(video_path: str, stride: int = 4, max_frames: int = 240) -> List[float]:
+    """
+    hand screening용:
+    손가락 tip ~ MCP / wrist 거리 기반 open-close proxy
+    """
+    cap = cv2.VideoCapture(video_path)
+    hands = mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=2,
+        model_complexity=1,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+
+    frame_idx = 0
+    used = 0
+    series: List[float] = []
+
+    tip_ids = [8, 12, 16, 20]
+    mcp_ids = [5, 9, 13, 17]
+    wrist_id = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame_idx += 1
+        if frame_idx % stride != 0:
+            continue
+        used += 1
+        if used > max_frames:
+            break
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        res = hands.process(rgb)
+        if not res.multi_hand_landmarks:
+            continue
+
+        best_open = None
+        for hand_lm in res.multi_hand_landmarks:
+            lm = hand_lm.landmark
+
+            wrist = np.array([lm[wrist_id].x, lm[wrist_id].y], dtype=np.float32)
+            index_mcp = np.array([lm[5].x, lm[5].y], dtype=np.float32)
+            pinky_mcp = np.array([lm[17].x, lm[17].y], dtype=np.float32)
+            hand_scale = float(np.linalg.norm(index_mcp - pinky_mcp) + 1e-6)
+
+            vals = []
+            for tip_id, mcp_id in zip(tip_ids, mcp_ids):
+                tip = np.array([lm[tip_id].x, lm[tip_id].y], dtype=np.float32)
+                mcp = np.array([lm[mcp_id].x, lm[mcp_id].y], dtype=np.float32)
+                vals.append(float(np.linalg.norm(tip - wrist) / hand_scale))
+                vals.append(float(np.linalg.norm(tip - mcp) / hand_scale))
+
+            openness = float(np.mean(vals))
+            if best_open is None or openness > best_open:
+                best_open = openness
+
+        if best_open is not None:
+            series.append(best_open)
+
+    cap.release()
+    hands.close()
+    return series
+
+
+def extract_screening_features(
+    video_path: str,
+    affectedSide: str,
+    functionKey: str,
+    stride: int = 4,
+    max_frames: int = 240,
+) -> Dict[str, Any]:
+    """
+    screening용 단일 영상 feature extraction
+    """
+    pose_feat = extract_pose_features(video_path, stride=stride, max_frames=max_frames)
+    aff, _ = _affected_unaffected_side_names(affectedSide)
+
+    features = {
+        "framesUsed": pose_feat["framesUsed"],
+        "meanVisibility": pose_feat["meanVisibility"],
+        "trunkLean": pose_feat["trunkLean"],
+        "shrugRatio": pose_feat["shrugRatio"],
+    }
+
+    if functionKey == "flexion":
+        features["motion"] = pose_feat[f"{aff}ShoulderElev"]
+        features["targetPeakDeg"] = 90.0
+
+    elif functionKey == "abduction":
+        features["motion"] = pose_feat[f"{aff}ShoulderElev"]
+        features["targetPeakDeg"] = 70.0
+
+    elif functionKey == "hand_to_head":
+        features["wristToHead"] = pose_feat[f"{aff}WristToHead"]
+        features["elbowStats"] = pose_feat[f"{aff}ElbowFlex"]
+        features["targetDistance"] = 0.45
+        features["targetElbowMinDeg"] = 75.0
+
+    elif functionKey == "hand_to_back":
+        features["wristToHip"] = pose_feat[f"{aff}WristToHip"]
+        features["backReach"] = pose_feat[f"{aff}BackReach"]
+        features["targetHipDistance"] = 0.55
+        features["targetBackReach"] = 0.05
+
+    elif functionKey == "reach_forward":
+        features["reachForward"] = pose_feat[f"{aff}ReachForward"]
+        features["shoulderElev"] = pose_feat[f"{aff}ShoulderElev"]
+        features["targetReach"] = 0.12
+        features["targetElevDeg"] = 25.0
+
+    elif functionKey == "reach_side":
+        features["reachSide"] = pose_feat[f"{aff}ReachSide"]
+        features["reachUp"] = pose_feat[f"{aff}ReachUp"]
+        features["targetReach"] = 0.18
+        features["targetUp"] = 0.10
+
+    elif functionKey == "elbow_flexion":
+        elbow_stats = pose_feat[f"{aff}ElbowFlex"]
+        features["elbowStats"] = elbow_stats
+        features["targetMinDeg"] = 70.0
+
+    elif functionKey == "elbow_extension":
+        elbow_stats = pose_feat[f"{aff}ElbowFlex"]
+        features["elbowStats"] = elbow_stats
+        features["targetMaxDeg"] = 160.0
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown functionKey: {functionKey}")
+
+    return features
+
+
+def score_screening_flexion(feat: Dict[str, Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    peak = float(feat["motion"]["max"])
+    rom = _ratio_score(peak, float(feat["targetPeakDeg"]))
+    comp = _screening_compensation_score(
+        trunk_lean_max=float(feat["trunkLean"]["max"]),
+        shrug_ratio_mean=float(feat["shrugRatio"]["mean"]),
+    )
+    overall = 0.75 * rom + 0.25 * comp
+
+    features = {
+        "functionKey": "flexion",
+        "peakDeg": peak,
+        "targetPeakDeg": feat["targetPeakDeg"],
+        "trunkLeanMaxDeg": feat["trunkLean"]["max"],
+        "shrugRatioMean": feat["shrugRatio"]["mean"],
+        "romScore": _score_0_100(rom),
+        "compensationScore": _score_0_100(comp),
+    }
+
+    quality = _screening_quality_json(
+        algo="screening_flexion_v1",
+        mean_visibility=float(feat["meanVisibility"]),
+        frames_used=int(feat["framesUsed"]),
+    )
+    return _score_0_100(overall), features, quality
+
+
+def score_screening_abduction(feat: Dict[str, Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    peak = float(feat["motion"]["max"])
+    rom = _ratio_score(peak, float(feat["targetPeakDeg"]))
+    comp = _screening_compensation_score(
+        trunk_lean_max=float(feat["trunkLean"]["max"]),
+        shrug_ratio_mean=float(feat["shrugRatio"]["mean"]),
+    )
+    overall = 0.75 * rom + 0.25 * comp
+
+    features = {
+        "functionKey": "abduction",
+        "peakDeg": peak,
+        "targetPeakDeg": feat["targetPeakDeg"],
+        "trunkLeanMaxDeg": feat["trunkLean"]["max"],
+        "shrugRatioMean": feat["shrugRatio"]["mean"],
+        "romScore": _score_0_100(rom),
+        "compensationScore": _score_0_100(comp),
+    }
+
+    quality = _screening_quality_json(
+        algo="screening_abduction_v1",
+        mean_visibility=float(feat["meanVisibility"]),
+        frames_used=int(feat["framesUsed"]),
+    )
+    return _score_0_100(overall), features, quality
+
+
+def score_screening_hand_to_head(feat: Dict[str, Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    wrist_min = float(feat["wristToHead"]["min"])
+    elbow_min = float(feat["elbowStats"]["min"])
+
+    dist_score = _inverse_ratio_score(wrist_min, float(feat["targetDistance"]))
+    elbow_score = _inverse_ratio_score(elbow_min, float(feat["targetElbowMinDeg"]))
+    comp = _screening_compensation_score(
+        trunk_lean_max=float(feat["trunkLean"]["max"]),
+        shrug_ratio_mean=float(feat["shrugRatio"]["mean"]),
+    )
+
+    overall = 0.55 * dist_score + 0.25 * elbow_score + 0.20 * comp
+
+    features = {
+        "functionKey": "hand_to_head",
+        "wristToHeadMin": wrist_min,
+        "targetDistance": feat["targetDistance"],
+        "elbowMinDeg": elbow_min,
+        "targetElbowMinDeg": feat["targetElbowMinDeg"],
+        "trunkLeanMaxDeg": feat["trunkLean"]["max"],
+        "shrugRatioMean": feat["shrugRatio"]["mean"],
+        "distanceScore": _score_0_100(dist_score),
+        "elbowScore": _score_0_100(elbow_score),
+        "compensationScore": _score_0_100(comp),
+    }
+
+    quality = _screening_quality_json(
+        algo="screening_hand_to_head_v1",
+        mean_visibility=float(feat["meanVisibility"]),
+        frames_used=int(feat["framesUsed"]),
+    )
+    return _score_0_100(overall), features, quality
+
+
+def score_screening_hand_to_back(feat: Dict[str, Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    hip_min = float(feat["wristToHip"]["min"])
+    back_max = float(feat["backReach"]["max"])
+
+    hip_score = _inverse_ratio_score(hip_min, float(feat["targetHipDistance"]))
+    back_score = _ratio_score(back_max, float(feat["targetBackReach"]))
+    comp = _screening_compensation_score(
+        trunk_lean_max=float(feat["trunkLean"]["max"]),
+        shrug_ratio_mean=float(feat["shrugRatio"]["mean"]),
+    )
+
+    overall = 0.45 * hip_score + 0.35 * back_score + 0.20 * comp
+
+    features = {
+        "functionKey": "hand_to_back",
+        "wristToHipMin": hip_min,
+        "targetHipDistance": feat["targetHipDistance"],
+        "backReachMax": back_max,
+        "targetBackReach": feat["targetBackReach"],
+        "trunkLeanMaxDeg": feat["trunkLean"]["max"],
+        "shrugRatioMean": feat["shrugRatio"]["mean"],
+        "hipScore": _score_0_100(hip_score),
+        "backScore": _score_0_100(back_score),
+        "compensationScore": _score_0_100(comp),
+    }
+
+    quality = _screening_quality_json(
+        algo="screening_hand_to_back_v1",
+        mean_visibility=float(feat["meanVisibility"]),
+        frames_used=int(feat["framesUsed"]),
+    )
+    return _score_0_100(overall), features, quality
+
+
+def score_screening_reach_forward(feat: Dict[str, Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    reach = float(feat["reachForward"]["max"])
+    elev = float(feat["shoulderElev"]["max"])
+
+    reach_score = _ratio_score(reach, float(feat["targetReach"]))
+    elev_score = _ratio_score(elev, float(feat["targetElevDeg"]))
+    comp = _screening_compensation_score(
+        trunk_lean_max=float(feat["trunkLean"]["max"]),
+        shrug_ratio_mean=float(feat["shrugRatio"]["mean"]),
+    )
+
+    overall = 0.55 * reach_score + 0.20 * elev_score + 0.25 * comp
+
+    features = {
+        "functionKey": "reach_forward",
+        "reachForwardMax": reach,
+        "targetReach": feat["targetReach"],
+        "shoulderElevMaxDeg": elev,
+        "targetElevDeg": feat["targetElevDeg"],
+        "trunkLeanMaxDeg": feat["trunkLean"]["max"],
+        "shrugRatioMean": feat["shrugRatio"]["mean"],
+        "reachScore": _score_0_100(reach_score),
+        "elevationScore": _score_0_100(elev_score),
+        "compensationScore": _score_0_100(comp),
+    }
+
+    quality = _screening_quality_json(
+        algo="screening_reach_forward_v1",
+        mean_visibility=float(feat["meanVisibility"]),
+        frames_used=int(feat["framesUsed"]),
+    )
+    return _score_0_100(overall), features, quality
+
+
+def score_screening_reach_side(feat: Dict[str, Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    reach = float(feat["reachSide"]["max"])
+    up = float(feat["reachUp"]["max"])
+
+    reach_score = _ratio_score(reach, float(feat["targetReach"]))
+    up_score = _ratio_score(up, float(feat["targetUp"]))
+    comp = _screening_compensation_score(
+        trunk_lean_max=float(feat["trunkLean"]["max"]),
+        shrug_ratio_mean=float(feat["shrugRatio"]["mean"]),
+    )
+
+    overall = 0.55 * reach_score + 0.20 * up_score + 0.25 * comp
+
+    features = {
+        "functionKey": "reach_side",
+        "reachSideMax": reach,
+        "targetReach": feat["targetReach"],
+        "reachUpMax": up,
+        "targetUp": feat["targetUp"],
+        "trunkLeanMaxDeg": feat["trunkLean"]["max"],
+        "shrugRatioMean": feat["shrugRatio"]["mean"],
+        "reachScore": _score_0_100(reach_score),
+        "upScore": _score_0_100(up_score),
+        "compensationScore": _score_0_100(comp),
+    }
+
+    quality = _screening_quality_json(
+        algo="screening_reach_side_v1",
+        mean_visibility=float(feat["meanVisibility"]),
+        frames_used=int(feat["framesUsed"]),
+    )
+    return _score_0_100(overall), features, quality
+
+
+def score_screening_elbow_flexion(feat: Dict[str, Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    elbow_min = float(feat["elbowStats"]["min"])
+    rom = _inverse_ratio_score(elbow_min, float(feat["targetMinDeg"]))
+    comp = _screening_compensation_score(
+        trunk_lean_max=float(feat["trunkLean"]["max"]),
+        shrug_ratio_mean=float(feat["shrugRatio"]["mean"]),
+    )
+
+    overall = 0.80 * rom + 0.20 * comp
+
+    features = {
+        "functionKey": "elbow_flexion",
+        "elbowMinDeg": elbow_min,
+        "targetMinDeg": feat["targetMinDeg"],
+        "trunkLeanMaxDeg": feat["trunkLean"]["max"],
+        "shrugRatioMean": feat["shrugRatio"]["mean"],
+        "romScore": _score_0_100(rom),
+        "compensationScore": _score_0_100(comp),
+    }
+
+    quality = _screening_quality_json(
+        algo="screening_elbow_flexion_v1",
+        mean_visibility=float(feat["meanVisibility"]),
+        frames_used=int(feat["framesUsed"]),
+    )
+    return _score_0_100(overall), features, quality
+
+
+def score_screening_elbow_extension(feat: Dict[str, Any]) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    elbow_max = float(feat["elbowStats"]["max"])
+    rom = _ratio_score(elbow_max, float(feat["targetMaxDeg"]))
+    comp = _screening_compensation_score(
+        trunk_lean_max=float(feat["trunkLean"]["max"]),
+        shrug_ratio_mean=float(feat["shrugRatio"]["mean"]),
+    )
+
+    overall = 0.80 * rom + 0.20 * comp
+
+    features = {
+        "functionKey": "elbow_extension",
+        "elbowMaxDeg": elbow_max,
+        "targetMaxDeg": feat["targetMaxDeg"],
+        "trunkLeanMaxDeg": feat["trunkLean"]["max"],
+        "shrugRatioMean": feat["shrugRatio"]["mean"],
+        "romScore": _score_0_100(rom),
+        "compensationScore": _score_0_100(comp),
+    }
+
+    quality = _screening_quality_json(
+        algo="screening_elbow_extension_v1",
+        mean_visibility=float(feat["meanVisibility"]),
+        frames_used=int(feat["framesUsed"]),
+    )
+    return _score_0_100(overall), features, quality
+
+
+def score_screening_motion(
+    feat: Dict[str, Any],
+    functionKey: str,
+) -> Tuple[int, Dict[str, Any], Dict[str, Any]]:
+    if functionKey == "flexion":
+        return score_screening_flexion(feat)
+    elif functionKey == "abduction":
+        return score_screening_abduction(feat)
+    elif functionKey == "hand_to_head":
+        return score_screening_hand_to_head(feat)
+    elif functionKey == "hand_to_back":
+        return score_screening_hand_to_back(feat)
+    elif functionKey == "reach_forward":
+        return score_screening_reach_forward(feat)
+    elif functionKey == "reach_side":
+        return score_screening_reach_side(feat)
+    elif functionKey == "elbow_flexion":
+        return score_screening_elbow_flexion(feat)
+    elif functionKey == "elbow_extension":
+        return score_screening_elbow_extension(feat)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown functionKey: {functionKey}")
 
 # =========================================================
 # api
 # =========================================================
+@app.post("/screening_analyze")
+async def screening_analyze(
+    video: UploadFile = File(...),
+    exerciseId: int = Form(0),
+    affectedSide: str = Form("L"),
+    functionKey: str = Form("flexion"),
+):
+    tmp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+            shutil.copyfileobj(video.file, tmp_file)
+            tmp_path = tmp_file.name
+
+        feat = extract_screening_features(
+            tmp_path,
+            affectedSide=affectedSide,
+            functionKey=functionKey,
+            stride=4,
+            max_frames=240,
+        )
+
+        overall, features, quality = score_screening_motion(feat, functionKey)
+
+        return {
+            "exerciseId": exerciseId,
+            "affectedSide": affectedSide,
+            "functionKey": functionKey,
+            "overall": overall,
+            "features": features,
+            "quality": quality,
+        }
+
+    finally:
+        try:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
 @app.post("/analyze")
 async def analyze(
     reference: UploadFile = File(...),
     imitation: UploadFile = File(...),
     exerciseId: int = Form(0),
     affectedSide: str = Form("L"),
+    taskTargetCount: int = Form(5),
+    taskStandardVersion: str = Form("task-standard-v1"),
+    scoreSchemaVersion: int = Form(2),
+    appVersion: str = Form(""),
 ):
     if exerciseId not in EXERCISES:
         raise HTTPException(status_code=400, detail=f"Unknown exerciseId: {exerciseId}")
@@ -1530,7 +2242,32 @@ async def analyze(
             raise HTTPException(status_code=400, detail=f"Unhandled exerciseId: {exerciseId}")
 
         quality["algo"] = EXERCISES[exerciseId]["algo"]
-        return _build_response(exerciseId, affectedSide, scores, features, quality)
+
+        task_payload = _calculate_task_payload(
+            exerciseId=exerciseId,
+            affectedSide=affectedSide,
+            imi=imi_feat,
+            scores=scores,
+            quality=quality,
+            taskTargetCount=taskTargetCount,
+            taskStandardVersion=taskStandardVersion,
+            scoreSchemaVersion=scoreSchemaVersion,
+            appVersion=appVersion,
+        )
+
+        print("taskTargetCount =", task_payload["taskTargetCount"])
+        print("taskSuccessCount =", task_payload["taskSuccessCount"])
+        print("taskScore =", task_payload["taskScore"])
+        print("finalTaskOrientedScore =", task_payload["finalTaskOrientedScore"])
+
+        return _build_response(
+            exerciseId,
+            affectedSide,
+            scores,
+            features,
+            quality,
+            task_payload=task_payload,
+        )
 
     finally:
         try:
