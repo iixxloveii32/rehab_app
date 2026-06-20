@@ -9,6 +9,7 @@ import 'package:isar/isar.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../config/app_config.dart';
+import '../exercises/exercise_definitions.dart';
 import '../models/session_log.dart';
 import '../storage/isar_db.dart';
 import '../utils/voice_guide.dart';
@@ -41,6 +42,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   int _smoothness = 0;
   int _compensation = 0;
   int _rom = 0;
+
+  int _taskTargetCount = 5;
+  int _taskSuccessCount = 0;
+  double _taskSuccessRate = 0.0;
+  double _taskScore = 0.0;
+  double _finalTaskOrientedScore = 0.0;
 
   late String _affectedSide;
 
@@ -711,6 +718,13 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _compensation = result.compensation;
       _rom = result.rom;
       _overall = result.overall;
+
+      _taskTargetCount = result.taskTargetCount;
+      _taskSuccessCount = result.taskSuccessCount;
+      _taskSuccessRate = result.taskSuccessRate;
+      _taskScore = result.taskScore;
+      _finalTaskOrientedScore = result.finalTaskOrientedScore;
+
       _quality = result.quality;
       _features = result.features;
 
@@ -813,6 +827,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }) async {
     final uri = Uri.parse(AppConfig.analyzeEndpoint);
 
+    final exercise = Exercises.byId(_exerciseId);
+
     final req = http.MultipartRequest('POST', uri)
       ..files.add(
         await http.MultipartFile.fromPath('reference', referenceVideoPath),
@@ -821,7 +837,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         await http.MultipartFile.fromPath('imitation', imitationVideoPath),
       )
       ..fields['exerciseId'] = _exerciseId.toString()
-      ..fields['affectedSide'] = _affectedSide;
+      ..fields['affectedSide'] = _affectedSide
+      ..fields['taskTargetCount'] = exercise.taskTargetCount.toString()
+      ..fields['taskStandardVersion'] = AppConfig.taskStandardVersion
+      ..fields['scoreSchemaVersion'] = AppConfig.scoreSchemaVersion.toString()
+      ..fields['appVersion'] = AppConfig.appVersion;
+
 
     final streamed = await req.send().timeout(const Duration(seconds: 60));
     final resp = await http.Response.fromStream(streamed);
@@ -837,7 +858,19 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     final quality =
         (j['quality'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
 
-    int asInt(dynamic v) => (v is num) ? v.round() : int.parse(v.toString());
+    int asInt(dynamic v, {int fallback = 0}) {
+      if (v == null) return fallback;
+      if (v is num) return v.round();
+      return int.tryParse(v.toString()) ?? fallback;
+    }
+
+    double asDouble(dynamic v, {double fallback = 0.0}) {
+      if (v == null) return fallback;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? fallback;
+    }
+
+    final fallbackTargetCount = exercise.taskTargetCount;
 
     return _MockResult(
       overall: asInt(j['overall']),
@@ -846,6 +879,14 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       smoothness: asInt(j['smoothness']),
       compensation: asInt(j['compensation']),
       rom: asInt(j['rom']),
+      taskTargetCount: asInt(
+        j['taskTargetCount'],
+        fallback: fallbackTargetCount,
+      ),
+      taskSuccessCount: asInt(j['taskSuccessCount']),
+      taskSuccessRate: asDouble(j['taskSuccessRate']),
+      taskScore: asDouble(j['taskScore']),
+      finalTaskOrientedScore: asDouble(j['finalTaskOrientedScore']),
       quality: quality,
       features: features,
     );
@@ -966,6 +1007,140 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _taskResultCard() {
+    final percent = (_taskSuccessRate * 100).clamp(0, 999).round();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FAFF),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFDCE6F2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '과제 수행 결과',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _taskMetricBox(
+                  label: '목표',
+                  value: '${_taskTargetCount}회 이상',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _taskMetricBox(
+                  label: '성공',
+                  value: '${_taskSuccessCount}회',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _taskMetricBox(
+                  label: '달성률',
+                  value: '$percent%',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _taskScoreRow(
+            label: '과제 성공 점수',
+            value: _taskScore,
+          ),
+          const SizedBox(height: 8),
+          _taskScoreRow(
+            label: '최종 과제지향 점수',
+            value: _finalTaskOrientedScore,
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            '성공 횟수는 실제 수행 횟수로 저장하고, 과제 성공 점수는 100점까지 반영합니다.',
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.4,
+              color: Color(0xFF5B6676),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskMetricBox({
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE3E8EF)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF5B6676),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF2F67B2),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _taskScoreRow({
+    required String label,
+    required double value,
+  }) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        Text(
+          '${value.round()}점',
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: Color(0xFF2F67B2),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1314,6 +1489,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                     else
                       _resultSummaryCard(needsRetake),
 
+                    if (!needsRetake) ...[
+                      const SizedBox(height: 14),
+                      _taskResultCard(),
+                    ],
+
                     const SizedBox(height: 14),
 
                     _voiceCommandCard(needsRetake),
@@ -1490,6 +1670,13 @@ class _MockResult {
   final int smoothness;
   final int compensation;
   final int rom;
+
+  final int taskTargetCount;
+  final int taskSuccessCount;
+  final double taskSuccessRate;
+  final double taskScore;
+  final double finalTaskOrientedScore;
+
   final Map<String, dynamic> quality;
   final Map<String, dynamic> features;
 
@@ -1500,6 +1687,11 @@ class _MockResult {
     required this.smoothness,
     required this.compensation,
     required this.rom,
+    required this.taskTargetCount,
+    required this.taskSuccessCount,
+    required this.taskSuccessRate,
+    required this.taskScore,
+    required this.finalTaskOrientedScore,
     required this.quality,
     required this.features,
   });

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:isar/isar.dart';
@@ -18,24 +20,73 @@ class ExerciseSelectPage extends StatefulWidget {
 }
 
 class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
+  static const int _autoStartDefaultSec = 10;
+
+  final stt.SpeechToText _pageSpeech = stt.SpeechToText();
+
   List<int> _recommendedIds = [];
   bool _loadingRecommendations = true;
+
+  bool _pageSpeechReady = false;
+  bool _pageListening = false;
+  bool _autoActionTriggered = false;
+
+  int _autoSecondsLeft = _autoStartDefaultSec;
+  String _pageLastWords = '';
+
+  Timer? _autoStartTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _loadRecommendedExercises();
+
       if (!mounted) return;
       setState(() {
         _loadingRecommendations = false;
       });
+
+      await _startVoiceAndAutoFlow();
     });
   }
 
-  void _handleBack() {
+  @override
+  void dispose() {
+    _stopPageVoiceFlow();
+    VoiceGuide.stop();
+    super.dispose();
+  }
+
+  Map? _routeData() {
     final extra = GoRouterState.of(context).extra;
-    final data = (extra is Map) ? extra : null;
+    return (extra is Map) ? extra : null;
+  }
+
+  int? _currentPatientId() {
+    final data = _routeData();
+    return data?['patientId'] as int?;
+  }
+
+  String _currentAffectedSide() {
+    final data = _routeData();
+    return (data?['affectedSide'] as String?) ?? 'L';
+  }
+
+  bool _allowRoutineStartAfterScreening() {
+    final data = _routeData();
+    return data?['autoStartRoutineAfterScreening'] == true;
+  }
+
+  bool _shouldStartEvaluationFirst() {
+    return !_allowRoutineStartAfterScreening();
+  }
+
+  void _handleBack() {
+    _stopPageVoiceFlow();
+    VoiceGuide.stop();
+
+    final data = _routeData();
 
     final int? patientId = data?['patientId'] as int?;
     final String? affectedSide = data?['affectedSide'] as String?;
@@ -47,11 +98,15 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
   }
 
   Future<void> _loadRecommendedExercises() async {
-    final extra = GoRouterState.of(context).extra;
-    final data = (extra is Map) ? extra : null;
-    final int? patientId = data?['patientId'] as int?;
+    final int? patientId = _currentPatientId();
 
-    if (patientId == null) return;
+    if (patientId == null) {
+      if (!mounted) return;
+      setState(() {
+        _recommendedIds = [];
+      });
+      return;
+    }
 
     final isar = IsarDB.instance;
     final logs = await isar.sessionLogs.where().findAll();
@@ -65,7 +120,13 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     )
         .toList();
 
-    if (screeningLogs.isEmpty) return;
+    if (screeningLogs.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _recommendedIds = [];
+      });
+      return;
+    }
 
     screeningLogs.sort((a, b) => b.timestampKst.compareTo(a.timestampKst));
     final latest = screeningLogs.first.sessionUuid;
@@ -82,8 +143,263 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     });
   }
 
+  void _stopPageVoiceFlow() {
+    _autoStartTimer?.cancel();
+    _autoStartTimer = null;
+
+    try {
+      if (_pageSpeech.isListening) {
+        _pageSpeech.stop();
+      }
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _pageListening = false;
+      });
+    }
+  }
+
+  Future<void> _startVoiceAndAutoFlow() async {
+    if (!mounted) return;
+    if (_loadingRecommendations) return;
+
+    final patientId = _currentPatientId();
+    if (patientId == null) return;
+
+    _stopPageVoiceFlow();
+
+    if (!mounted) return;
+    setState(() {
+      _autoActionTriggered = false;
+      _autoSecondsLeft = _autoStartDefaultSec;
+      _pageLastWords = '';
+    });
+
+    final hasRecommendations = _recommendedIds.isNotEmpty;
+    final allowRoutineStart = _allowRoutineStartAfterScreening();
+    final shouldStartEvaluation = _shouldStartEvaluationFirst();
+
+    try {
+      final available = await _pageSpeech.initialize(
+        onStatus: (status) {
+          if (!mounted) return;
+          setState(() {
+            _pageListening = status == 'listening';
+          });
+        },
+        onError: (error) {
+          if (!mounted) return;
+          setState(() {
+            _pageListening = false;
+          });
+        },
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _pageSpeechReady = available;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _pageSpeechReady = false;
+        _pageListening = false;
+      });
+    }
+
+    if (allowRoutineStart && hasRecommendations && !shouldStartEvaluation) {
+      await VoiceGuide.speak(
+        '평가가 완료되어 오늘의 추천운동 세 가지가 준비되었습니다. '
+            '운동시작이라고 말하면 첫 번째 운동을 바로 시작합니다. '
+            '말이 없으면 10초 후 자동으로 첫 번째 운동이 시작됩니다.',
+      );
+    } else {
+      await VoiceGuide.speak(
+        '오늘의 추천운동을 만들기 위해 먼저 현재 상태 평가를 진행합니다. '
+            '평가라고 말하면 바로 시작합니다. '
+            '말이 없으면 10초 후 자동으로 현재 상태 평가가 시작됩니다.',
+      );
+    }
+
+    if (!mounted || _autoActionTriggered) return;
+
+    _startAutoCountdown();
+
+    if (_pageSpeechReady) {
+      await _startPageListening();
+    }
+  }
+
+  void _startAutoCountdown() {
+    _autoStartTimer?.cancel();
+
+    _autoStartTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_autoActionTriggered) {
+        timer.cancel();
+        return;
+      }
+
+      if (_autoSecondsLeft <= 1) {
+        timer.cancel();
+        await _triggerPrimaryAction();
+        return;
+      }
+
+      setState(() {
+        _autoSecondsLeft -= 1;
+      });
+    });
+  }
+
+  Future<void> _startPageListening() async {
+    if (!_pageSpeechReady) return;
+    if (_autoActionTriggered) return;
+
+    try {
+      await _pageSpeech.listen(
+        onResult: (result) async {
+          final words = result.recognizedWords.trim();
+
+          if (!mounted) return;
+          setState(() {
+            _pageLastWords = words;
+          });
+
+          if (words.isEmpty) return;
+          await _handlePageVoiceCommand(words);
+        },
+        listenFor: const Duration(seconds: 10),
+        pauseFor: const Duration(seconds: 3),
+        partialResults: true,
+        cancelOnError: true,
+        localeId: 'ko_KR',
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _pageListening = false;
+      });
+    }
+  }
+
+  String _normalizeVoiceText(String text) {
+    return text
+        .replaceAll(' ', '')
+        .replaceAll('.', '')
+        .replaceAll(',', '')
+        .replaceAll('\n', '')
+        .trim()
+        .toLowerCase();
+  }
+
+  bool _isEvaluationCommand(String text) {
+    final normalized = _normalizeVoiceText(text);
+
+    return normalized.contains('평가') ||
+        normalized.contains('상태평가') ||
+        normalized.contains('현재상태') ||
+        normalized.contains('검사') ||
+        normalized.contains('측정');
+  }
+
+  bool _isRoutineStartCommand(String text) {
+    final normalized = _normalizeVoiceText(text);
+
+    return normalized.contains('운동시작') ||
+        normalized.contains('추천운동') ||
+        normalized.contains('시작') ||
+        normalized.contains('운동해') ||
+        normalized.contains('운동');
+  }
+
+  Future<void> _handlePageVoiceCommand(String words) async {
+    if (_autoActionTriggered) return;
+
+    final hasRecommendations = _recommendedIds.isNotEmpty;
+    final allowRoutineStart = _allowRoutineStartAfterScreening();
+
+    if (!allowRoutineStart) {
+      if (_isEvaluationCommand(words)) {
+        await _triggerPrimaryAction();
+      }
+      return;
+    }
+
+    if (allowRoutineStart &&
+        hasRecommendations &&
+        _isRoutineStartCommand(words)) {
+      await _triggerPrimaryAction();
+      return;
+    }
+
+    if (_isEvaluationCommand(words)) {
+      await _triggerPrimaryAction();
+      return;
+    }
+  }
+
+  Future<void> _triggerPrimaryAction() async {
+    if (_autoActionTriggered) return;
+
+    setState(() {
+      _autoActionTriggered = true;
+    });
+
+    _stopPageVoiceFlow();
+    await VoiceGuide.stop();
+
+    final int? patientId = _currentPatientId();
+    final String affectedSide = _currentAffectedSide();
+
+    final allowRoutineStart = _allowRoutineStartAfterScreening();
+
+    if (allowRoutineStart && _recommendedIds.isNotEmpty) {
+      _startRoutine(patientId, affectedSide);
+    } else {
+      await _startScreeningFlow(patientId, affectedSide);
+    }
+  }
+
+  Future<void> _startScreeningFlow(
+      int? patientId,
+      String affectedSide,
+      ) async {
+    _stopPageVoiceFlow();
+    await VoiceGuide.stop();
+
+    await context.push('/screening', extra: {
+      'patientId': patientId,
+      'affectedSide': affectedSide,
+    });
+
+    if (!mounted) return;
+
+    setState(() {
+      _loadingRecommendations = true;
+      _autoActionTriggered = false;
+    });
+
+    await _loadRecommendedExercises();
+
+    if (!mounted) return;
+    setState(() {
+      _loadingRecommendations = false;
+    });
+
+    await _startVoiceAndAutoFlow();
+  }
+
   void _startRoutine(int? patientId, String affectedSide) {
     if (patientId == null || _recommendedIds.isEmpty) return;
+
+    _stopPageVoiceFlow();
+    VoiceGuide.stop();
 
     final sessionUuid = DateTime.now().microsecondsSinceEpoch.toString();
 
@@ -106,16 +422,25 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
       int? patientId,
       String affectedSide,
       ) async {
+    _stopPageVoiceFlow();
+    await VoiceGuide.stop();
+
     final repeatCount = await showModalBottomSheet<int>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _RepeatCountSheet(
+        taskTitle: ex.taskTitle as String,
         exerciseName: ex.name as String,
+        taskDescription: ex.taskDescription as String,
+        taskTargetCount: ex.taskTargetCount as int,
       ),
     );
 
-    if (repeatCount == null) return;
+    if (repeatCount == null) {
+      await _startVoiceAndAutoFlow();
+      return;
+    }
 
     final sessionUuid = DateTime.now().microsecondsSinceEpoch.toString();
 
@@ -134,11 +459,8 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
 
   @override
   Widget build(BuildContext context) {
-    final extra = GoRouterState.of(context).extra;
-    final data = (extra is Map) ? extra : null;
-
-    final int? patientId = data?['patientId'] as int?;
-    final String affectedSide = (data?['affectedSide'] as String?) ?? 'L';
+    final int? patientId = _currentPatientId();
+    final String affectedSide = _currentAffectedSide();
     final items = Exercises.list;
 
     final isTablet = Responsive.isTablet(context);
@@ -156,40 +478,58 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
             icon: const Icon(Icons.arrow_back),
             onPressed: _handleBack,
           ),
-          title: const Text('운동 시작하기'),
+          title: const Text('오늘의 상지 재활'),
         ),
         body: AppScaffoldBody(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: ListView(
             children: [
-              _sectionTitle('현재 상태 확인'),
+              _dailyFlowCard(),
+              const SizedBox(height: 12),
+              _voiceActionCard(),
+              SizedBox(height: sectionGap),
+              _sectionTitle('1. 현재 상태 평가'),
               const SizedBox(height: 8),
               _screeningCard(patientId, affectedSide),
               SizedBox(height: sectionGap),
-              _sectionTitle('오늘의 운동'),
+              _sectionTitle('2. 오늘의 추천운동'),
               const SizedBox(height: 8),
               if (_loadingRecommendations)
-                _infoCard('추천 운동을 불러오는 중입니다...')
-              else if (_recommendedIds.isEmpty)
-                _infoCard('먼저 현재 상태 평가를 진행해 주세요.')
+                _infoCard('추천운동을 불러오는 중입니다...')
+              else if (_recommendedIds.isEmpty ||
+                  !_allowRoutineStartAfterScreening())
+                _infoCard(
+                  '오늘의 추천운동을 새로 만들기 위해 먼저 현재 상태 평가를 진행합니다.\n'
+                      '“평가”라고 말하면 바로 시작하고, 말이 없으면 $_autoSecondsLeft초 후 자동으로 평가가 시작됩니다.',
+                )
               else ...[
                   _recommendedList(items),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
-                    child: ElevatedButton(
+                    child: ElevatedButton.icon(
                       onPressed: () => _startRoutine(patientId, affectedSide),
-                      child: const Text('오늘의 운동 시작하기'),
+                      icon: const Icon(Icons.play_arrow_rounded),
+                      label: const Text('추천운동 3개 시작하기'),
                     ),
                   ),
                 ],
               SizedBox(height: sectionGap),
-              _sectionTitle('전체 운동'),
+              _sectionTitle('치료사용 직접 선택'),
               const SizedBox(height: 8),
-              Expanded(
-                child: isTablet
-                    ? GridView.builder(
+              Text(
+                '필요 시 치료사가 직접 운동을 선택할 수 있습니다.',
+                style: TextStyle(
+                  fontSize: Responsive.bodyFontSize(context) - 1,
+                  color: const Color(0xFF5B6676),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (isTablet)
+                GridView.builder(
                   itemCount: items.length,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
                   gridDelegate:
                   const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 2,
@@ -202,20 +542,159 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
                     return _exerciseCard(ex, patientId, affectedSide);
                   },
                 )
-                    : ListView.builder(
-                  itemCount: items.length,
-                  itemBuilder: (context, index) {
-                    final ex = items[index];
+              else
+                Column(
+                  children: items.map((ex) {
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: _exerciseCard(ex, patientId, affectedSide),
                     );
-                  },
+                  }).toList(),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _dailyFlowCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF2FF),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFD2E2FA)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: const [
+          Text(
+            '오늘의 진행 순서',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          SizedBox(height: 12),
+          _FlowStepText(
+            number: '1',
+            text: '현재 상태 평가하기',
+          ),
+          SizedBox(height: 7),
+          _FlowStepText(
+            number: '2',
+            text: '오늘의 추천운동 3개 확인하기',
+          ),
+          SizedBox(height: 7),
+          _FlowStepText(
+            number: '3',
+            text: '추천운동을 순서대로 수행하기',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _voiceActionCard() {
+    final hasRecommendations = _recommendedIds.isNotEmpty;
+    final allowRoutineStart = _allowRoutineStartAfterScreening();
+
+    final title = allowRoutineStart && hasRecommendations
+        ? '추천운동 준비 완료'
+        : '현재 상태 평가 필요';
+
+    final command = allowRoutineStart && hasRecommendations ? '운동시작' : '평가';
+
+    final description = allowRoutineStart && hasRecommendations
+        ? '“운동시작”이라고 말하면 첫 번째 추천운동을 바로 시작합니다.\n'
+        '말이 없으면 $_autoSecondsLeft초 후 자동으로 첫 번째 운동이 시작됩니다.'
+        : '“평가”라고 말하면 현재 상태 평가를 바로 시작합니다.\n'
+        '말이 없으면 $_autoSecondsLeft초 후 자동으로 평가가 시작됩니다.';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFE3E8EF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.mic_none_rounded, size: 24),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: _pageListening
+                      ? const Color(0xFFEAF7EE)
+                      : const Color(0xFFF1F4F8),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  _pageListening ? '듣는 중' : '대기',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: _pageListening
+                        ? const Color(0xFF3FAE6F)
+                        : const Color(0xFF5B6676),
+                  ),
                 ),
               ),
             ],
           ),
-        ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _VoiceCommandPill(text: command),
+              if (allowRoutineStart && hasRecommendations)
+                const _VoiceCommandPill(text: '시작'),
+              if (!allowRoutineStart || !hasRecommendations)
+                const _VoiceCommandPill(text: '상태평가'),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            description,
+            style: TextStyle(
+              fontSize: Responsive.bodyFontSize(context) - 1,
+              height: 1.4,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF455468),
+            ),
+          ),
+          if (_pageLastWords.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              '인식된 말: $_pageLastWords',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF5B6676),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -245,6 +724,7 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
           text,
           style: TextStyle(
             fontSize: Responsive.bodyFontSize(context),
+            height: 1.4,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -256,13 +736,7 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     return Builder(
       builder: (context) => InkWell(
         onTap: () async {
-          await context.push('/screening', extra: {
-            'patientId': patientId,
-            'affectedSide': affectedSide,
-          });
-          if (mounted) {
-            await _loadRecommendedExercises();
-          }
+          await _startScreeningFlow(patientId, affectedSide ?? 'L');
         },
         borderRadius: BorderRadius.circular(Responsive.cardRadius(context)),
         child: Container(
@@ -288,7 +762,7 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  '현재 상태 평가하기\n간단한 동작으로 기능을 확인해요',
+                  '현재 상태 평가하기\n“평가”라고 말하거나 여기를 눌러 시작하세요.',
                   style: TextStyle(
                     fontSize: Responsive.bodyFontSize(context),
                     height: 1.35,
@@ -307,14 +781,16 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
 
   Widget _recommendedList(List items) {
     return Column(
-      children: _recommendedIds.map((id) {
+      children: _recommendedIds.asMap().entries.map((entry) {
+        final index = entry.key;
+        final id = entry.value;
         final ex = items.firstWhere((e) => e.id == id);
-        return _recommendCard(ex);
+        return _recommendCard(ex, index + 1);
       }).toList(),
     );
   }
 
-  Widget _recommendCard(dynamic ex) {
+  Widget _recommendCard(dynamic ex, int order) {
     return Builder(
       builder: (context) => Container(
         width: double.infinity,
@@ -326,15 +802,45 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.star, color: Colors.blue),
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Center(
+                child: Text(
+                  '$order',
+                  style: const TextStyle(
+                    color: Color(0xFF2F67B2),
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(
-                ex.name,
-                style: TextStyle(
-                  fontSize: Responsive.bodyFontSize(context) + 1,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    ex.taskTitle,
+                    style: TextStyle(
+                      fontSize: Responsive.bodyFontSize(context) + 1,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${ex.name} 운동',
+                    style: TextStyle(
+                      fontSize: Responsive.bodyFontSize(context) - 2,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF5B6676),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -360,15 +866,24 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Text(
-                ex.name,
+                ex.taskTitle,
                 style: TextStyle(
-                  fontSize: Responsive.bodyFontSize(context) + 1,
-                  fontWeight: FontWeight.w700,
+                  fontSize: Responsive.bodyFontSize(context) + 2,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
               Text(
-                ex.desc,
+                '${ex.name} 운동',
+                style: TextStyle(
+                  fontSize: Responsive.bodyFontSize(context) - 1,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF5B6676),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                ex.taskDescription,
                 maxLines: Responsive.isTablet(context) ? 3 : null,
                 overflow: Responsive.isTablet(context)
                     ? TextOverflow.ellipsis
@@ -377,6 +892,28 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
                   fontSize: Responsive.bodyFontSize(context) - 1,
                   height: 1.4,
                   color: const Color(0xFF5B6676),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7FAFF),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                    color: const Color(0xFFDCE6F2),
+                  ),
+                ),
+                child: Text(
+                  '목표: 1분 동안 ${ex.taskTargetCount}회 이상 성공',
+                  style: TextStyle(
+                    fontSize: Responsive.bodyFontSize(context) - 2,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF2F67B2),
+                  ),
                 ),
               ),
               const SizedBox(height: 10),
@@ -396,11 +933,64 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
   }
 }
 
+class _FlowStepText extends StatelessWidget {
+  final String number;
+  final String text;
+
+  const _FlowStepText({
+    required this.number,
+    required this.text,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 24,
+          height: 24,
+          decoration: BoxDecoration(
+            color: const Color(0xFF4F8DF7),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Center(
+            child: Text(
+              number,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF26313F),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _RepeatCountSheet extends StatefulWidget {
+  final String taskTitle;
   final String exerciseName;
+  final String taskDescription;
+  final int taskTargetCount;
 
   const _RepeatCountSheet({
+    required this.taskTitle,
     required this.exerciseName,
+    required this.taskDescription,
+    required this.taskTargetCount,
   });
 
   @override
@@ -629,13 +1219,53 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    widget.exerciseName,
+                    widget.taskTitle,
                     style: TextStyle(
                       fontSize: Responsive.largeTitleFontSize(context) - 5,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${widget.exerciseName} 운동',
+                    style: TextStyle(
+                      fontSize: Responsive.bodyFontSize(context) - 1,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF5B6676),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    widget.taskDescription,
+                    style: TextStyle(
+                      fontSize: Responsive.bodyFontSize(context) - 1,
+                      height: 1.35,
+                      color: const Color(0xFF5B6676),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF7FAFF),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: const Color(0xFFDCE6F2),
+                      ),
+                    ),
+                    child: Text(
+                      '수행 목표: 1분 동안 ${widget.taskTargetCount}회 이상 성공',
+                      style: TextStyle(
+                        fontSize: Responsive.bodyFontSize(context) - 2,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFF2F67B2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
                   Text(
                     '반복할 횟수를 선택해 주세요.',
                     style: TextStyle(
