@@ -9,7 +9,7 @@ android {
     namespace = "com.example.rehab_app"
 
     // android:attr/lStar not found 오류 해결을 위해 compileSdk를 명시적으로 올림
-    compileSdk = 35
+    compileSdk = 36
 
     ndkVersion = flutter.ndkVersion
 
@@ -30,7 +30,7 @@ android {
         minSdk = flutter.minSdkVersion
 
         // 교수님 검토용 APK 빌드 기준
-        targetSdk = 35
+        targetSdk = 36
 
         versionCode = flutter.versionCode
         versionName = flutter.versionName
