@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:isar/isar.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:video_player/video_player.dart';
 
 import '../config/app_config.dart';
 import '../exercises/exercise_definitions.dart';
@@ -58,12 +59,15 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Map<String, dynamic> _features = <String, dynamic>{};
 
   Timer? _autoTimer;
-  int _secondsLeft = 5;
+  int _secondsLeft = 10;
 
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _speechReady = false;
   bool _listening = false;
   String _lastRecognizedWords = '';
+
+  VideoPlayerController? _analysisVideoController;
+  bool _analysisVideoReady = false;
 
   bool get _hasRoutine => _fromRoutine && _routineExerciseIds.isNotEmpty;
   bool get _isLastRoutineItem {
@@ -89,6 +93,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     _autoTimer?.cancel();
     _stopListening();
     VoiceGuide.stop();
+    _analysisVideoController?.dispose();
     super.dispose();
   }
 
@@ -506,7 +511,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   void _startAutoNext() {
     _autoTimer?.cancel();
-    _secondsLeft = 5;
+    _secondsLeft = 10;
 
     _autoTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -651,6 +656,39 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     });
   }
 
+
+  Future<void> _prepareAnalysisVideo(String patientPath) async {
+    if (patientPath.isEmpty || !File(patientPath).existsSync()) return;
+
+    try {
+      final oldController = _analysisVideoController;
+      _analysisVideoController = null;
+      _analysisVideoReady = false;
+      await oldController?.dispose();
+
+      final controller = VideoPlayerController.file(File(patientPath));
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.setVolume(0.0);
+      await controller.play();
+
+      if (!mounted) {
+        await controller.dispose();
+        return;
+      }
+
+      setState(() {
+        _analysisVideoController = controller;
+        _analysisVideoReady = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _analysisVideoReady = false;
+      });
+    }
+  }
+
   Future<void> _saveScore() async {
     try {
       final extra = GoRouterState.of(context).extra;
@@ -687,6 +725,8 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _referenceVideoPath = modelPath;
       _patientId = patientId;
       _exerciseId = exerciseId;
+
+      await _prepareAnalysisVideo(patientPath);
 
       final now = DateTime.now();
       final todayKey = _dateKey(now);
@@ -779,6 +819,10 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         await isar.sessionLogs.put(imitLog);
       });
 
+      try {
+        await _analysisVideoController?.pause();
+      } catch (_) {}
+
       if (!mounted) return;
       setState(() => _saving = false);
 
@@ -844,7 +888,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       ..fields['appVersion'] = AppConfig.appVersion;
 
 
-    final streamed = await req.send().timeout(const Duration(seconds: 60));
+    final streamed = await req.send().timeout(const Duration(seconds: 180));
     final resp = await http.Response.fromStream(streamed);
 
     if (resp.statusCode != 200) {
@@ -1449,6 +1493,131 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     );
   }
 
+
+  Widget _analysisWaitingView() {
+    final controller = _analysisVideoController;
+    final hasVideo = _analysisVideoReady &&
+        controller != null &&
+        controller.value.isInitialized;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEAF2FF),
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '결과를 분석하고 있어요',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      height: 1.25,
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  Text(
+                    '방금 수행한 움직임을 다시 보면서\n팔이 얼마나 부드럽게 움직였는지 관찰해 보세요.',
+                    style: TextStyle(
+                      fontSize: 16,
+                      height: 1.45,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: Center(
+                child: hasVideo
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(22),
+                        child: Container(
+                          color: Colors.black,
+                          child: AspectRatio(
+                            aspectRatio: controller.value.aspectRatio,
+                            child: VideoPlayer(controller),
+                          ),
+                        ),
+                      )
+                    : Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(22),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF7FAFF),
+                          borderRadius: BorderRadius.circular(22),
+                          border: Border.all(
+                            color: const Color(0xFFDCE6F2),
+                          ),
+                        ),
+                        child: const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.video_library_outlined,
+                              size: 42,
+                              color: Color(0xFF5B8DEF),
+                            ),
+                            SizedBox(height: 12),
+                            Text(
+                              '수행 영상을 준비하고 있어요.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFE3E8EF)),
+              ),
+              child: const Row(
+                children: [
+                  SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 3),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      '분석이 끝나면 자동으로 결과가 표시됩니다.',
+                      style: TextStyle(
+                        fontSize: 15,
+                        height: 1.35,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final needsRetake = _quality['needsRetake'] == true;
@@ -1462,7 +1631,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       ),
       body: SafeArea(
         child: _saving
-            ? const Center(child: CircularProgressIndicator())
+            ? _analysisWaitingView()
             : (_error != null)
             ? Center(
           child: Padding(
