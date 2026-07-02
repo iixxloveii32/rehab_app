@@ -7,6 +7,7 @@ import tempfile
 import shutil
 import math
 import os
+import time
 from typing import Dict, Any, List, Tuple
 
 app = FastAPI()
@@ -30,6 +31,21 @@ def _clamp01(x: float) -> float:
 
 def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
+
+
+def _resize_frame_max_width(frame: np.ndarray, max_width: int = 640) -> np.ndarray:
+    """Resize large phone frames before MediaPipe to speed up analysis."""
+    if frame is None or max_width <= 0:
+        return frame
+
+    h, w = frame.shape[:2]
+    if w <= max_width:
+        return frame
+
+    scale = max_width / float(w)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
 
 def _score_0_100(x: float) -> int:
@@ -294,12 +310,21 @@ EXERCISES = {
 def extract_pose_features(
     video_path: str,
     stride: int = 6,
-    max_frames: int = 600,
+    max_frames: int = 300,
+    target_fps: float = 5.0,
+    max_width: int = 640,
 ) -> Dict[str, Any]:
     cap = cv2.VideoCapture(video_path)
+
+    source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    if source_fps > 0 and target_fps > 0:
+        effective_stride = max(int(round(source_fps / target_fps)), 1)
+    else:
+        effective_stride = max(int(stride or 1), 1)
+
     pose = mp_pose.Pose(
         static_image_mode=False,
-        model_complexity=1,
+        model_complexity=0,
         enable_segmentation=False,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
@@ -348,13 +373,14 @@ def extract_pose_features(
             break
 
         frame_idx += 1
-        if frame_idx % stride != 0:
+        if frame_idx % effective_stride != 0:
             continue
 
         used += 1
         if used > max_frames:
             break
 
+        frame = _resize_frame_max_width(frame, max_width=640)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         res = pose.process(rgb)
         if not res.pose_landmarks:
@@ -1674,16 +1700,19 @@ def _screening_compensation_score(trunk_lean_max: float, shrug_ratio_mean: float
     return _clamp(100.0 - trunk_pen - shrug_pen, 0.0, 100.0)
 
 
-def _vector_angle_series(video_path: str, affectedSide: str, stride: int = 4, max_frames: int = 240) -> List[float]:
+def _vector_angle_series(video_path: str, affectedSide: str, stride: int = 4, max_frames: int = 180) -> List[float]:
     """
     forearm proxy:
     affected side의 elbow->wrist 벡터의 영상 평면 각도 변화를 이용해 회내/회외를 매우 거칠게 추정
     (pose 기반 proxy이므로 정확도는 낮음)
     """
     cap = cv2.VideoCapture(video_path)
+    source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    effective_stride = max(int(round(source_fps / 5.0)), 1) if source_fps > 0 else max(int(stride or 1), 1)
+
     pose = mp_pose.Pose(
         static_image_mode=False,
-        model_complexity=1,
+        model_complexity=0,
         enable_segmentation=False,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
@@ -1705,12 +1734,13 @@ def _vector_angle_series(video_path: str, affectedSide: str, stride: int = 4, ma
         if not ret:
             break
         frame_idx += 1
-        if frame_idx % stride != 0:
+        if frame_idx % effective_stride != 0:
             continue
         used += 1
         if used > max_frames:
             break
 
+        frame = _resize_frame_max_width(frame, max_width=640)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         res = pose.process(rgb)
         if not res.pose_landmarks:
@@ -1737,16 +1767,19 @@ def _vector_angle_series(video_path: str, affectedSide: str, stride: int = 4, ma
     return [float(x) for x in np.degrees(arr)]
 
 
-def _hand_open_series(video_path: str, stride: int = 4, max_frames: int = 240) -> List[float]:
+def _hand_open_series(video_path: str, stride: int = 4, max_frames: int = 180) -> List[float]:
     """
     hand screening용:
     손가락 tip ~ MCP / wrist 거리 기반 open-close proxy
     """
     cap = cv2.VideoCapture(video_path)
+    source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    effective_stride = max(int(round(source_fps / 5.0)), 1) if source_fps > 0 else max(int(stride or 1), 1)
+
     hands = mp_hands.Hands(
         static_image_mode=False,
         max_num_hands=2,
-        model_complexity=1,
+        model_complexity=0,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
     )
@@ -1764,12 +1797,13 @@ def _hand_open_series(video_path: str, stride: int = 4, max_frames: int = 240) -
         if not ret:
             break
         frame_idx += 1
-        if frame_idx % stride != 0:
+        if frame_idx % effective_stride != 0:
             continue
         used += 1
         if used > max_frames:
             break
 
+        frame = _resize_frame_max_width(frame, max_width=640)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         res = hands.process(rgb)
         if not res.multi_hand_landmarks:
@@ -2202,6 +2236,8 @@ async def analyze(
     imi_path = None
 
     try:
+        analyze_t0 = time.perf_counter()
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as ref_file:
             shutil.copyfileobj(reference.file, ref_file)
             ref_path = ref_file.name
@@ -2210,8 +2246,17 @@ async def analyze(
             shutil.copyfileobj(imitation.file, imi_file)
             imi_path = imi_file.name
 
-        ref_feat = extract_pose_features(ref_path, stride=6, max_frames=600)
-        imi_feat = extract_pose_features(imi_path, stride=6, max_frames=600)
+        upload_saved_t = time.perf_counter()
+
+        # Fast analysis setting:
+        # - sample about 5 frames/sec instead of processing every frame
+        # - resize large phone video frames to max width 640px
+        # - MediaPipe Pose model_complexity=0 inside extract_pose_features()
+        ref_feat = extract_pose_features(ref_path, stride=6, max_frames=120, target_fps=5.0, max_width=640)
+        ref_done_t = time.perf_counter()
+
+        imi_feat = extract_pose_features(imi_path, stride=6, max_frames=320, target_fps=5.0, max_width=640)
+        imi_done_t = time.perf_counter()
 
         print("=== analyze start ===")
         print("exerciseId =", exerciseId)
@@ -2220,7 +2265,14 @@ async def analyze(
         print("ref rightShoulderElev max =", ref_feat["rightShoulderElev"]["max"])
         print("imi leftShoulderElev max =", imi_feat["leftShoulderElev"]["max"])
         print("imi rightShoulderElev max =", imi_feat["rightShoulderElev"]["max"])
+        print("framesUsed_ref =", ref_feat["framesUsed"])
+        print("framesUsed_imi =", imi_feat["framesUsed"])
+        print("time_save_upload_sec =", round(upload_saved_t - analyze_t0, 3))
+        print("time_ref_extract_sec =", round(ref_done_t - upload_saved_t, 3))
+        print("time_imi_extract_sec =", round(imi_done_t - ref_done_t, 3))
         print("=====================")
+
+        score_t0 = time.perf_counter()
 
         if exerciseId == 0:
             scores, features, quality = score_shoulder_flexion(ref_feat, imi_feat, affectedSide)
@@ -2255,10 +2307,14 @@ async def analyze(
             appVersion=appVersion,
         )
 
+        analyze_done_t = time.perf_counter()
+
         print("taskTargetCount =", task_payload["taskTargetCount"])
         print("taskSuccessCount =", task_payload["taskSuccessCount"])
         print("taskScore =", task_payload["taskScore"])
         print("finalTaskOrientedScore =", task_payload["finalTaskOrientedScore"])
+        print("time_scoring_sec =", round(analyze_done_t - score_t0, 3))
+        print("time_total_analyze_sec =", round(analyze_done_t - analyze_t0, 3))
 
         return _build_response(
             exerciseId,
