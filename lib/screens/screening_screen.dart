@@ -98,8 +98,9 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
 
     await VoiceGuide.speak(
       '현재 상태 평가를 시작합니다. '
-          '시작 또는 평가라고 말하면 바로 시작합니다. '
-          '말이 없으면 10초 후 자동으로 평가가 시작됩니다.',
+          '5가지 동작을 천천히 따라해 주세요. '
+          '평가라고 말하면 바로 시작합니다. '
+          '말씀이 없으면 10초 후 자동으로 시작합니다.',
     );
 
     if (!mounted || _started) return;
@@ -201,13 +202,12 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
   bool _isStartCommand(String text) {
     final normalized = _normalize(text);
 
-    return normalized.contains('시작') ||
-        normalized.contains('평가') ||
-        normalized.contains('평가시작') ||
+    return normalized.contains('평가') ||
+        normalized.contains('시작') ||
         normalized.contains('상태평가') ||
         normalized.contains('현재상태') ||
         normalized.contains('검사') ||
-        normalized.contains('준비');
+        normalized.contains('측정');
   }
 
   Future<void> _startScreening() async {
@@ -280,85 +280,168 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
           ),
         ),
         body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(16),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight - 36,
                   ),
-                  child: const Column(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '상지 기능 평가',
+                      _introCard(),
+                      const SizedBox(height: 12),
+                      _voiceStartCard(patientId),
+                      const SizedBox(height: 18),
+                      const Text(
+                        '평가 동작 5가지',
                         style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
-                      SizedBox(height: 8),
-                      Text(
-                        '간단한 5가지 동작을 통해 현재 상지 기능을 확인합니다.\n'
-                            '화면 안내에 따라 천천히 움직여 주세요.\n'
-                            '각 동작은 예시와 안내 문구가 함께 제공됩니다.',
-                        style: TextStyle(fontSize: 15, height: 1.5),
+                      const SizedBox(height: 10),
+                      _screeningItemList(),
+                      const SizedBox(height: 18),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 54,
+                        child: ElevatedButton.icon(
+                          onPressed: _started ? null : _startScreening,
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: Text(_started ? '평가 시작 중...' : '평가 시작하기'),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: _started ? null : _handleBack,
+                          child: const Text('운동 선택으로 돌아가기'),
+                        ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-                _voiceStartCard(patientId),
-                const SizedBox(height: 20),
-                const Text(
-                  '평가 동작',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: ListView.separated(
-                    itemCount: screeningFunctionItems.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final item = screeningFunctionItems[index];
-                      return ListTile(
-                        tileColor: Colors.grey.shade100,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.white,
-                          child: Text('${index + 1}'),
-                        ),
-                        title: Text(item.title),
-                        subtitle: Text(item.desc),
-                        trailing: const Icon(Icons.chevron_right),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: _started ? null : _startScreening,
-                    child: Text(_started ? '평가 시작 중...' : '평가 시작하기'),
-                  ),
-                ),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),
+    );
+  }
+
+  Widget _introCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF2FF),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFD2E2FA)),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '현재 상태 평가',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+              height: 1.2,
+            ),
+          ),
+          SizedBox(height: 10),
+          Text(
+            '5가지 동작을 확인한 뒤, 오늘 추천운동 3가지를 정합니다.',
+            style: TextStyle(
+              fontSize: 16,
+              height: 1.45,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF26313F),
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            '다음 화면에서 카메라 위치를 맞춘 뒤, 각 동작 시작 전 3초 카운트다운이 표시됩니다.',
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.4,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF5B6676),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _screeningItemList() {
+    return Column(
+      children: List.generate(screeningFunctionItems.length, (index) {
+        final item = screeningFunctionItems[index];
+
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFE3E8EF)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEAF2FF),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Center(
+                  child: Text(
+                    '${index + 1}',
+                    style: const TextStyle(
+                      color: Color(0xFF2F67B2),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      item.desc,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        height: 1.35,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF5B6676),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      }),
     );
   }
 
@@ -370,7 +453,7 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: const Color(0xFFE3E8EF)),
       ),
       child: Column(
@@ -382,10 +465,10 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
               const SizedBox(width: 8),
               const Expanded(
                 child: Text(
-                  '자동 평가 시작',
+                  '평가 자동 시작',
                   style: TextStyle(
                     fontSize: 17,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w900,
                   ),
                 ),
               ),
@@ -414,25 +497,25 @@ class _ScreeningScreenState extends State<ScreeningScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          Wrap(
+          const Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: const [
-              _ScreeningVoicePill(text: '시작'),
+            children: [
               _ScreeningVoicePill(text: '평가'),
-              _ScreeningVoicePill(text: '평가시작'),
+              _ScreeningVoicePill(text: '시작'),
+              _ScreeningVoicePill(text: '상태평가'),
             ],
           ),
           const SizedBox(height: 10),
           Text(
             canStart
-                ? '“시작” 또는 “평가”라고 말하면 바로 평가를 시작합니다.\n'
-                '말이 없으면 $_autoSecondsLeft초 후 자동으로 평가가 시작됩니다.'
+                ? '“평가”라고 말하면 바로 시작합니다.\n'
+                '말씀이 없으면 $_autoSecondsLeft초 후 자동으로 시작합니다.'
                 : '먼저 사용자를 선택해 주세요.',
             style: const TextStyle(
               fontSize: 14,
               height: 1.4,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
               color: Color(0xFF455468),
             ),
           ),

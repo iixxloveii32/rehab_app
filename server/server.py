@@ -491,6 +491,8 @@ def extract_pose_features(
         "leftBackReach": _safe_stats(left_back_reach),
         "rightBackReach": _safe_stats(right_back_reach),
         "_series": {
+            "trunkLean": trunk_angles,
+            "shrugRatio": shrug_ratios,
             "leftShoulderElev": left_shoulder_elev,
             "rightShoulderElev": right_shoulder_elev,
             "leftElbowFlex": left_elbow_flex,
@@ -1581,6 +1583,249 @@ def _task_series_for_exercise(
     return [], "unknown", 0.08
 
 
+
+def _detect_repetition_intervals_from_series(
+    series: List[float],
+    *,
+    min_amplitude: float = 0.08,
+    min_frames_between_counts: int = 3,
+) -> List[Tuple[int, int]]:
+    """
+    Detect completed repetitions as READY -> REACHED -> READY intervals.
+    This returns intervals so the quality scores can be calculated from the
+    same successful repetitions instead of mixing max/mean/global values.
+    """
+    if not series or len(series) < 6:
+        return []
+
+    arr = np.array(series, dtype=np.float32)
+    arr = arr[np.isfinite(arr)]
+    if len(arr) < 6:
+        return []
+
+    if len(arr) >= 5:
+        kernel = np.ones(3, dtype=np.float32) / 3.0
+        arr = np.convolve(arr, kernel, mode="same")
+
+    mn = float(np.percentile(arr, 10))
+    mx = float(np.percentile(arr, 90))
+    amp = mx - mn
+    if amp < min_amplitude:
+        return []
+
+    low_thr = mn + 0.35 * amp
+    high_thr = mn + 0.70 * amp
+
+    state = "ready"
+    start_idx = 0
+    intervals: List[Tuple[int, int]] = []
+    last_count_idx = -9999
+
+    for i, v in enumerate(arr):
+        value = float(v)
+        if state == "ready":
+            if value <= low_thr:
+                start_idx = i
+            if value >= high_thr:
+                state = "reached"
+        elif state == "reached":
+            if value <= low_thr:
+                if i - last_count_idx >= min_frames_between_counts:
+                    intervals.append((max(0, start_idx), i))
+                    last_count_idx = i
+                state = "ready"
+                start_idx = i
+
+    return intervals
+
+
+def _series_slice(series: List[float], start: int, end: int) -> List[float]:
+    if not series:
+        return []
+    start = max(0, min(start, len(series) - 1))
+    end = max(start + 1, min(end + 1, len(series)))
+    return [float(x) for x in series[start:end] if np.isfinite(x)]
+
+
+def _rep_primary_series_for_exercise(
+    feat: Dict[str, Any],
+    exerciseId: int,
+    side_name: str,
+) -> Tuple[List[float], str, float, str]:
+    series = feat.get("_series", {})
+
+    if exerciseId in (0, 1):
+        return series.get(f"{side_name}ShoulderElev", []), f"{side_name}ShoulderElev", 12.0, "larger"
+    if exerciseId == 2:
+        return series.get(f"{side_name}WristToHeadInv", []), f"{side_name}WristToHeadInv", 0.08, "larger"
+    if exerciseId == 3:
+        return series.get(f"{side_name}WristToHipInv", []), f"{side_name}WristToHipInv", 0.08, "larger"
+    if exerciseId == 4:
+        fwd = series.get(f"{side_name}ReachForward", [])
+        if fwd:
+            arr = np.array(fwd, dtype=np.float32)
+            if len(arr) >= 6 and float(np.nanpercentile(arr, 90) - np.nanpercentile(arr, 10)) >= 0.03:
+                return fwd, f"{side_name}ReachForward", 0.03, "larger"
+        return series.get(f"{side_name}ShoulderElev", []), f"{side_name}ShoulderElev_fallback", 12.0, "larger"
+    if exerciseId == 5:
+        return series.get(f"{side_name}ReachSide", []), f"{side_name}ReachSide", 0.08, "larger"
+    if exerciseId == 6:
+        elbow = series.get(f"{side_name}ElbowFlex", [])
+        return [max(0.0, 180.0 - float(x)) for x in elbow], f"{side_name}ElbowFlexInv", 12.0, "larger"
+    if exerciseId == 7:
+        return series.get(f"{side_name}ElbowFlex", []), f"{side_name}ElbowExtensionProxy", 12.0, "larger"
+    return [], "unknown", 0.08, "larger"
+
+
+def _aggregate_scores_from_success_reps(
+    *,
+    exerciseId: int,
+    affectedSide: str,
+    ref: Dict[str, Any],
+    imi: Dict[str, Any],
+    base_scores: Dict[str, int],
+    quality: Dict[str, Any],
+) -> Tuple[Dict[str, int], Dict[str, Any]]:
+    """
+    Research score schema v3.
+    All movement-quality items use the same representative rule:
+    successful repetition mean.
+
+    - Repetitions are detected from the task-specific affected-side series.
+    - Each detected completed repetition is treated as a successful repetition.
+    - ROM, symmetry, timing, smoothness, and compensation are calculated per
+      successful repetition and then averaged.
+    - Failed/missing repetitions are reflected through taskSuccessCount/taskScore,
+      not by mixing max ROM with global smoothness.
+    """
+    if quality.get("needsRetake") is True:
+        return base_scores, {
+            "repScoreSchemaVersion": 3,
+            "repAggregation": "skipped_needs_retake",
+            "repDetectedCount": 0,
+            "repSuccessCount": 0,
+        }
+
+    aff, unaff = _affected_unaffected_side_names(affectedSide)
+    ref_series, ref_key, min_amp, _ = _rep_primary_series_for_exercise(ref, exerciseId, unaff)
+    imi_series, imi_key, min_amp, _ = _rep_primary_series_for_exercise(imi, exerciseId, aff)
+
+    intervals = _detect_repetition_intervals_from_series(
+        imi_series,
+        min_amplitude=min_amp,
+        min_frames_between_counts=3,
+    )
+
+    if not intervals:
+        return base_scores, {
+            "repScoreSchemaVersion": 3,
+            "repAggregation": "fallback_global_score_no_repetition_interval",
+            "repDetectedCount": 0,
+            "repSuccessCount": 0,
+            "repSeriesKey": imi_key,
+        }
+
+    ref_arr = [float(x) for x in ref_series if np.isfinite(x)]
+    if not ref_arr:
+        return base_scores, {
+            "repScoreSchemaVersion": 3,
+            "repAggregation": "fallback_no_reference_series",
+            "repDetectedCount": len(intervals),
+            "repSuccessCount": len(intervals),
+            "repSeriesKey": imi_key,
+        }
+
+    ref_peak = max(ref_arr)
+    ref_duration = max(1, _series_duration(ref_arr))
+    quality_factor = _quality_score(ref, imi)
+
+    trunk_series = imi.get("_series", {}).get("trunkLean", [])
+    shrug_series = imi.get("_series", {}).get("shrugRatio", [])
+    ref_trunk = ref.get("trunkLean", {}).get("max", 0.0)
+    ref_shrug = ref.get("shrugRatio", {}).get("mean", 0.0)
+
+    rom_values: List[float] = []
+    symmetry_values: List[float] = []
+    timing_values: List[float] = []
+    smooth_values: List[float] = []
+    comp_values: List[float] = []
+
+    for start, end in intervals:
+        seg = _series_slice(imi_series, start, end)
+        if len(seg) < 2:
+            continue
+
+        rep_peak = max(seg)
+        rom = _ratio_score(rep_peak, ref_peak)
+        symmetry = max(0.0, 100.0 - 100.0 * abs(rep_peak - ref_peak) / (abs(ref_peak) + 1e-6))
+        duration_ratio = len(seg) / float(ref_duration)
+        timing = 100.0 - 60.0 * abs(math.log(max(duration_ratio, 1e-6)))
+        timing = _clamp(timing, 0.0, 100.0)
+        smoothness = _smoothness_score_from_series(seg, quality_factor)
+
+        trunk_seg = _series_slice(trunk_series, start, end)
+        shrug_seg = _series_slice(shrug_series, start, end)
+        rep_trunk = max(trunk_seg) if trunk_seg else imi.get("trunkLean", {}).get("max", 0.0)
+        rep_shrug = float(np.mean(shrug_seg)) if shrug_seg else imi.get("shrugRatio", {}).get("mean", 0.0)
+        trunk_delta = max(0.0, rep_trunk - ref_trunk)
+        shrug_delta = max(0.0, rep_shrug - ref_shrug)
+        comp = max(0.0, 100.0 - (0.65 * min(60.0, trunk_delta * 4.0) + 0.35 * min(60.0, shrug_delta * 400.0)))
+
+        rom_values.append(rom)
+        symmetry_values.append(symmetry)
+        timing_values.append(timing)
+        smooth_values.append(smoothness)
+        comp_values.append(comp)
+
+    if not rom_values:
+        return base_scores, {
+            "repScoreSchemaVersion": 3,
+            "repAggregation": "fallback_empty_rep_quality",
+            "repDetectedCount": len(intervals),
+            "repSuccessCount": 0,
+            "repSeriesKey": imi_key,
+        }
+
+    rom_mean = float(np.mean(rom_values))
+    symmetry_mean = float(np.mean(symmetry_values))
+    timing_mean = float(np.mean(timing_values))
+    smooth_mean = float(np.mean(smooth_values))
+    comp_mean = float(np.mean(comp_values))
+
+    if exerciseId in (0, 1):
+        overall = 0.40 * rom_mean + 0.20 * symmetry_mean + 0.25 * comp_mean + 0.05 * timing_mean + 0.10 * smooth_mean
+    elif exerciseId in (4, 5):
+        overall = 0.45 * rom_mean + 0.15 * symmetry_mean + 0.25 * comp_mean + 0.05 * timing_mean + 0.10 * smooth_mean
+    else:
+        overall = 0.50 * rom_mean + 0.15 * symmetry_mean + 0.20 * comp_mean + 0.05 * timing_mean + 0.10 * smooth_mean
+
+    scores = {
+        "overall": _score_0_100(overall),
+        "symmetry": _score_0_100(symmetry_mean),
+        "timing": _score_0_100(timing_mean),
+        "smoothness": _score_0_100(smooth_mean),
+        "compensation": _score_0_100(comp_mean),
+        "rom": _score_0_100(rom_mean),
+    }
+
+    rep_payload = {
+        "repScoreSchemaVersion": 3,
+        "repAggregation": "mean_successful_repetitions",
+        "repDetectedCount": int(len(intervals)),
+        "repSuccessCount": int(len(rom_values)),
+        "repFailedCountByTargetOnly": None,
+        "repSeriesKey": imi_key,
+        "refSeriesKey": ref_key,
+        "romMeanSuccess": round(rom_mean, 2),
+        "romMedianSuccess": round(float(np.median(rom_values)), 2),
+        "romBestSuccess": round(float(np.max(rom_values)), 2),
+        "symmetryMeanSuccess": round(symmetry_mean, 2),
+        "timingMeanSuccess": round(timing_mean, 2),
+        "smoothnessMeanSuccess": round(smooth_mean, 2),
+        "compensationMeanSuccess": round(comp_mean, 2),
+    }
+    return scores, rep_payload
+
 def _calculate_task_payload(
     *,
     exerciseId: int,
@@ -1592,6 +1837,7 @@ def _calculate_task_payload(
     taskStandardVersion: str,
     scoreSchemaVersion: int,
     appVersion: str,
+    rep_quality: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     target = max(1, int(taskTargetCount or 5))
 
@@ -1607,11 +1853,15 @@ def _calculate_task_payload(
             affectedSide,
         )
         series_frames = len(task_series)
-        success_count = _count_repetitions_from_series(
-            task_series,
-            min_amplitude=min_amp,
-            min_frames_between_counts=3,
-        )
+        if rep_quality and rep_quality.get("repAggregation") == "mean_successful_repetitions":
+            success_count = int(rep_quality.get("repSuccessCount", 0))
+            series_key = str(rep_quality.get("repSeriesKey", series_key))
+        else:
+            success_count = _count_repetitions_from_series(
+                task_series,
+                min_amplitude=min_amp,
+                min_frames_between_counts=3,
+            )
 
     success_rate = float(success_count) / float(target)
     task_score = min(success_rate * 100.0, 100.0)
@@ -1629,6 +1879,7 @@ def _calculate_task_payload(
         "taskCountAlgo": "task_count_state_machine_v1",
         "taskSeriesKey": series_key,
         "taskSeriesFrames": int(series_frames),
+        **(rep_quality or {}),
     }
 
 
@@ -2226,7 +2477,7 @@ async def analyze(
     affectedSide: str = Form("L"),
     taskTargetCount: int = Form(5),
     taskStandardVersion: str = Form("task-standard-v1"),
-    scoreSchemaVersion: int = Form(2),
+    scoreSchemaVersion: int = Form(3),
     appVersion: str = Form(""),
 ):
     if exerciseId not in EXERCISES:
@@ -2295,6 +2546,20 @@ async def analyze(
 
         quality["algo"] = EXERCISES[exerciseId]["algo"]
 
+        scores, rep_quality = _aggregate_scores_from_success_reps(
+            exerciseId=exerciseId,
+            affectedSide=affectedSide,
+            ref=ref_feat,
+            imi=imi_feat,
+            base_scores=scores,
+            quality=quality,
+        )
+        features = {
+            **features,
+            "repQuality": rep_quality,
+            "scoreDefinition": "quality_items_are_mean_of_successful_repetitions; failed_or_missing_reps_are_reflected_in_taskScore",
+        }
+
         task_payload = _calculate_task_payload(
             exerciseId=exerciseId,
             affectedSide=affectedSide,
@@ -2305,6 +2570,7 @@ async def analyze(
             taskStandardVersion=taskStandardVersion,
             scoreSchemaVersion=scoreSchemaVersion,
             appVersion=appVersion,
+            rep_quality=rep_quality,
         )
 
         analyze_done_t = time.perf_counter()

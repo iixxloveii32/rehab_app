@@ -145,6 +145,343 @@ String _exerciseName(int id) {
   }
 }
 
+Future<void> _applyExerciseSpecificZoom(
+    CameraController controller,
+    int exerciseId,
+    ) async {
+  try {
+    final minZoom = await controller.getMinZoomLevel();
+    final maxZoom = await controller.getMaxZoomLevel();
+
+    double targetZoom = 1.0;
+
+    if (exerciseId == 1 || exerciseId == 5) {
+      // 팔 옆으로 들기와 옆으로 손 뻗기는 좌우 움직임 반경이 커서,
+      // 기기가 지원하는 가장 넓은 화각에 가깝게 잡는다.
+      targetZoom = minZoom < 0.7 ? 0.7 : minZoom;
+    }
+
+    if (targetZoom < minZoom) {
+      targetZoom = minZoom;
+    }
+
+    if (targetZoom > maxZoom) {
+      targetZoom = maxZoom;
+    }
+
+    await controller.setZoomLevel(targetZoom);
+  } catch (_) {
+    // 줌 조절을 지원하지 않는 기기에서는 기본 카메라 상태를 유지한다.
+  }
+}
+
+class _PatientPositionGuide extends StatelessWidget {
+  const _PatientPositionGuide();
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final h = constraints.maxHeight;
+
+          final shoulderY = h * 0.42;
+          final leftSafeX = w * 0.09;
+          final rightSafeX = w * 0.91;
+          final bottomSafeY = h * 0.88;
+          final shoulderWidth = w * 0.42;
+          final shoulderLeft = (w - shoulderWidth) / 2;
+
+          return Stack(
+            children: [
+              Positioned(
+                left: leftSafeX,
+                top: 0,
+                bottom: 0,
+                child: Container(
+                  width: 1.2,
+                  color: Colors.white.withOpacity(0.22),
+                ),
+              ),
+              Positioned(
+                left: rightSafeX,
+                top: 0,
+                bottom: 0,
+                child: Container(
+                  width: 1.2,
+                  color: Colors.white.withOpacity(0.22),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                top: bottomSafeY,
+                child: Container(
+                  height: 1.2,
+                  color: Colors.white.withOpacity(0.20),
+                ),
+              ),
+              Positioned(
+                left: shoulderLeft,
+                top: shoulderY,
+                child: Container(
+                  width: shoulderWidth,
+                  height: 2.4,
+                  decoration: BoxDecoration(
+                    color: Colors.lightGreenAccent.withOpacity(0.88),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+              ),
+              Positioned(
+                left: shoulderLeft - 6,
+                top: shoulderY - 5,
+                child: _guideDot(),
+              ),
+              Positioned(
+                left: shoulderLeft + shoulderWidth - 6,
+                top: shoulderY - 5,
+                child: _guideDot(),
+              ),
+              Positioned(
+                left: 14,
+                right: 14,
+                bottom: 12,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.42),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: const Text(
+                      '손끝까지 보이게 조금 더 멀리 서 주세요',
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _guideDot() {
+    return Container(
+      width: 12,
+      height: 12,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.lightGreenAccent.withOpacity(0.95),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.9),
+          width: 1.2,
+        ),
+      ),
+    );
+  }
+}
+
+class _TaskTargetOverlay extends StatelessWidget {
+  final int exerciseId;
+  final String affectedSide;
+
+  const _TaskTargetOverlay({
+    required this.exerciseId,
+    required this.affectedSide,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cue = _cueForExercise(exerciseId, affectedSide);
+    return IgnorePointer(
+      child: CustomPaint(
+        painter: _DirectionCuePainter(cue),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+
+  _DirectionCue _cueForExercise(int id, String side) {
+    final isLeft = side == 'L';
+    Offset sideStart = Offset(isLeft ? 0.46 : 0.54, 0.48);
+    Offset sideEnd = Offset(isLeft ? 0.18 : 0.82, 0.36);
+    Offset sideEndFlat = Offset(isLeft ? 0.16 : 0.84, 0.48);
+    Offset waistEnd = Offset(isLeft ? 0.36 : 0.64, 0.66);
+
+    switch (id) {
+      case 0:
+        return const _DirectionCue(
+          start: Offset(0.50, 0.53),
+          end: Offset(0.50, 0.25),
+          label: '위로 들어요',
+          curved: false,
+        );
+      case 1:
+        return _DirectionCue(
+          start: sideStart,
+          end: sideEnd,
+          label: '옆으로 들어요',
+          curved: false,
+        );
+      case 2:
+        return const _DirectionCue(
+          start: Offset(0.50, 0.58),
+          end: Offset(0.50, 0.30),
+          label: '머리 쪽으로',
+          curved: true,
+        );
+      case 3:
+        return _DirectionCue(
+          start: sideStart,
+          end: waistEnd,
+          label: '허리 뒤로',
+          curved: true,
+        );
+      case 4:
+        return const _DirectionCue(
+          start: Offset(0.50, 0.55),
+          end: Offset(0.50, 0.39),
+          label: '앞으로 뻗어요',
+          curved: false,
+        );
+      case 5:
+        return _DirectionCue(
+          start: sideStart,
+          end: sideEndFlat,
+          label: '옆으로 뻗어요',
+          curved: false,
+        );
+      case 6:
+        return const _DirectionCue(
+          start: Offset(0.50, 0.58),
+          end: Offset(0.50, 0.42),
+          label: '몸 쪽으로',
+          curved: true,
+        );
+      case 7:
+        return const _DirectionCue(
+          start: Offset(0.50, 0.54),
+          end: Offset(0.50, 0.38),
+          label: '앞으로 펴요',
+          curved: false,
+        );
+      default:
+        return const _DirectionCue(
+          start: Offset(0.50, 0.55),
+          end: Offset(0.50, 0.38),
+          label: '움직여요',
+          curved: false,
+        );
+    }
+  }
+}
+
+class _DirectionCue {
+  final Offset start;
+  final Offset end;
+  final String label;
+  final bool curved;
+
+  const _DirectionCue({
+    required this.start,
+    required this.end,
+    required this.label,
+    required this.curved,
+  });
+}
+
+class _DirectionCuePainter extends CustomPainter {
+  final _DirectionCue cue;
+
+  _DirectionCuePainter(this.cue);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final start = Offset(cue.start.dx * size.width, cue.start.dy * size.height);
+    final end = Offset(cue.end.dx * size.width, cue.end.dy * size.height);
+    final color = Colors.orangeAccent.withOpacity(0.92);
+
+    final path = Path()..moveTo(start.dx, start.dy);
+    if (cue.curved) {
+      final control = Offset((start.dx + end.dx) / 2, start.dy - 70);
+      path.quadraticBezierTo(control.dx, control.dy, end.dx, end.dy);
+    } else {
+      path.lineTo(end.dx, end.dy);
+    }
+
+    final shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.25)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 7
+      ..strokeCap = StrokeCap.round;
+    canvas.drawPath(path, shadowPaint);
+
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round;
+    canvas.drawPath(path, paint);
+
+    final direction = end - start;
+    final angle = direction.direction;
+    final arrowLength = 18.0;
+    final arrowAngle = 0.55;
+    final p1 = end - Offset.fromDirection(angle - arrowAngle, arrowLength);
+    final p2 = end - Offset.fromDirection(angle + arrowAngle, arrowLength);
+    final arrowPath = Path()
+      ..moveTo(p1.dx, p1.dy)
+      ..lineTo(end.dx, end.dy)
+      ..lineTo(p2.dx, p2.dy);
+    canvas.drawPath(arrowPath, shadowPaint);
+    canvas.drawPath(arrowPath, paint);
+
+    final dotPaint = Paint()..color = color;
+    canvas.drawCircle(end, 6, dotPaint);
+    canvas.drawCircle(end, 8, Paint()..color = Colors.white.withOpacity(0.35)..style = PaintingStyle.stroke..strokeWidth = 2);
+
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: cue.label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.w900,
+          shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final labelOffset = Offset(
+      (end.dx - textPainter.width / 2).clamp(8.0, size.width - textPainter.width - 8.0),
+      (end.dy + 12).clamp(8.0, size.height - textPainter.height - 8.0),
+    );
+    final bg = RRect.fromRectAndRadius(
+      Rect.fromLTWH(labelOffset.dx - 8, labelOffset.dy - 4, textPainter.width + 16, textPainter.height + 8),
+      const Radius.circular(999),
+    );
+    canvas.drawRRect(bg, Paint()..color = Colors.black.withOpacity(0.45));
+    textPainter.paint(canvas, labelOffset);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DirectionCuePainter oldDelegate) => oldDelegate.cue != cue;
+}
+
 class StepHeader extends StatelessWidget {
   final int step;
   final String title;
@@ -302,6 +639,7 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
       initialDate: initial,
       firstDate: DateTime(1900, 1, 1),
       lastDate: now,
+      locale: const Locale('ko', 'KR'),
     );
 
     if (picked == null) return;
@@ -376,7 +714,8 @@ class _PatientFormScreenState extends State<PatientFormScreen> {
                 builder: (context, constraints) {
                   return SingleChildScrollView(
                     child: ConstrainedBox(
-                      constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                      constraints:
+                      BoxConstraints(minHeight: constraints.maxHeight),
                       child: IntrinsicHeight(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -525,10 +864,14 @@ class _RecordingScreenState extends State<RecordingScreen> {
       final controller = CameraController(
         selected,
         ResolutionPreset.medium,
-        enableAudio: true,
+        enableAudio: false,
       );
 
       await controller.initialize();
+
+      final data = _routeExtra(context);
+      final exerciseId = (data?['exerciseId'] as int?) ?? 0;
+      await _applyExerciseSpecificZoom(controller, exerciseId);
 
       if (!mounted) return;
       setState(() {
@@ -536,14 +879,10 @@ class _RecordingScreenState extends State<RecordingScreen> {
         _initializing = false;
       });
 
-      final data = _routeExtra(context);
-      final exerciseId = (data?['exerciseId'] as int?) ?? 0;
       final exercise = Exercises.byId(exerciseId);
 
       await VoiceGuide.speak(
-        '건강한 쪽 팔로 ${exercise.taskTitle} 과제를 촬영합니다. '
-            '${exercise.taskDescription} '
-            '${AppConfig.recordDurationSec}초 동안 천천히 반복해 주세요.',
+        '건강한 팔로 촬영합니다. 처음 맞춘 위치에서 준비해 주세요.',
       );
 
       _startAutoFlow();
@@ -586,7 +925,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
     if (_autoFlowStarted) return;
     _autoFlowStarted = true;
 
-    await VoiceGuide.speak('준비해 주세요. 3초 후 촬영이 시작됩니다.');
+    await VoiceGuide.speak('3초 후 시작합니다.');
 
     if (!mounted) return;
     setState(() {
@@ -607,7 +946,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
         setState(() {
           _prepareSeconds = 0;
         });
-        await VoiceGuide.speak('지금 시작합니다.');
+        VoiceGuide.speak('시작');
         await _startAutoRecord();
       } else {
         setState(() {
@@ -737,6 +1076,7 @@ class _RecordingScreenState extends State<RecordingScreen> {
     final c = _controller;
     final data = _routeExtra(context);
     final exerciseId = (data?['exerciseId'] as int?) ?? 0;
+    final affectedSide = (data?['affectedSide'] as String?) ?? 'L';
     final exercise = Exercises.byId(exerciseId);
 
     return PopScope(
@@ -769,20 +1109,12 @@ class _RecordingScreenState extends State<RecordingScreen> {
               ),
               child: Column(
                 children: [
-                  StepHeader(
-                    step: 1,
+                  _CompactStageHeader(
+                    stage: '건강한 팔 촬영',
                     title: exercise.taskTitle,
-                    subtitle:
-                    '${exercise.name} 운동\n\n${exercise.taskDescription}\n${exercise.taskGuide}',
-                  ),
-                  const SizedBox(height: 10),
-                  StatusCard(
-                    text: _statusText(),
+                    status: _statusText(),
                     trailing: _recording
-                        ? const Icon(
-                      Icons.fiber_manual_record,
-                      color: Colors.red,
-                    )
+                        ? const Icon(Icons.fiber_manual_record, color: Colors.red)
                         : null,
                   ),
                 ],
@@ -795,7 +1127,18 @@ class _RecordingScreenState extends State<RecordingScreen> {
                   _PreviewFrame(
                     aspectRatio:
                     _cameraAspectRatioForScreen(context, c),
-                    child: CameraPreview(c),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        CameraPreview(c),
+                        const _PatientPositionGuide(),
+                        if (_prepareSeconds <= 0)
+                          _TaskTargetOverlay(
+                            exerciseId: exerciseId,
+                            affectedSide: affectedSide,
+                          ),
+                      ],
+                    ),
                   ),
                   if (_prepareSeconds > 0 &&
                       !_recording &&
@@ -927,6 +1270,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
         const Duration(seconds: 10),
         onTimeout: () => throw Exception('영상 초기화 시간이 초과되었습니다.'),
       );
+      await controller.setVolume(0.0);
 
       debugPrint('review initialize success');
       debugPrint(
@@ -948,10 +1292,7 @@ class _ReviewScreenState extends State<ReviewScreen> {
       await Future.delayed(const Duration(milliseconds: 300));
 
       await VoiceGuide.speak(
-        '${exercise.taskTitle} 과제를 관찰합니다. '
-            '거울을 보는 것처럼 반전된 영상을 보면서 '
-            '환측 팔이 같은 동작을 하는 모습을 상상해 주세요. '
-            '같은 영상을 ${AppConfig.reviewRepeatCount}번 보여드릴게요.',
+        '영상을 보며 움직임을 기억해 주세요.',
       );
 
       if (!mounted || _navigating) return;
@@ -1044,12 +1385,11 @@ class _ReviewScreenState extends State<ReviewScreen> {
     }
 
     await VoiceGuide.stop();
-    await VoiceGuide.speak('이제 환측 팔로 같은 과제를 천천히 따라해 볼게요.');
+    await VoiceGuide.speak('이제 환측 팔로 따라해 볼게요.');
 
     final data = _routeExtra(context);
     final path = data?['videoPath'] as String?;
-    final referenceVideoPath =
-        data?['referenceVideoPath'] as String? ?? path;
+    final referenceVideoPath = data?['referenceVideoPath'] as String? ?? path;
 
     final patientId = data?['patientId'] as int?;
     final affectedSide = data?['affectedSide'] as String?;
@@ -1139,25 +1479,15 @@ class _ReviewScreenState extends State<ReviewScreen> {
                 ),
                 child: Column(
                   children: [
-                    StepHeader(
-                      step: 2,
+                    _CompactStageHeader(
+                      stage: '거울 영상 관찰',
                       title: exercise.taskTitle,
-                      subtitle:
-                      '${exercise.name} 운동\n\n반전된 영상을 보면서 환측 팔이 같은 과제를 수행하는 모습을 상상해 주세요.\n${exercise.taskDescription}',
-                    ),
-                    const SizedBox(height: 10),
-                    StatusCard(
-                      text: _guideFinished
-                          ? '동작을 잘 관찰하며 환측 팔의 움직임을 상상해 주세요.'
-                          : '잠시 후 거울 영상을 보며 동작을 관찰합니다.',
+                      status: _guideFinished
+                          ? '움직임을 기억해 주세요'
+                          : '잠시 후 재생됩니다',
                       trailing: Text(
-                        _guideFinished
-                            ? '${_playCount + 1} / $_targetPlayCount'
-                            : '대기',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
+                        _guideFinished ? '${_playCount + 1} / $_targetPlayCount' : '대기',
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                       ),
                     ),
                   ],
@@ -1253,8 +1583,8 @@ class _ImitationScreenState extends State<ImitationScreen> {
   Future<void> _init() async {
     final data = _routeExtra(context);
     final path = data?['videoPath'] as String?;
-    final referenceVideoPath =
-        data?['referenceVideoPath'] as String? ?? path;
+    final referenceVideoPath = data?['referenceVideoPath'] as String? ?? path;
+    final exerciseId = (data?['exerciseId'] as int?) ?? 0;
 
     if (referenceVideoPath == null ||
         referenceVideoPath.isEmpty ||
@@ -1270,6 +1600,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
     try {
       final vc = VideoPlayerController.file(File(referenceVideoPath));
       await vc.initialize();
+      await vc.setVolume(0.0);
       await vc.setLooping(true);
 
       final cameras = await availableCameras();
@@ -1282,7 +1613,9 @@ class _ImitationScreenState extends State<ImitationScreen> {
         ResolutionPreset.medium,
         enableAudio: false,
       );
+
       await cc.initialize();
+      await _applyExerciseSpecificZoom(cc, exerciseId);
 
       if (!mounted) return;
       setState(() {
@@ -1327,12 +1660,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
     final exercise = Exercises.byId(exerciseId);
 
     await VoiceGuide.speak(
-      '${exercise.taskTitle} 과제를 환측 팔로 따라합니다. '
-          '예시 영상을 보면서 1분 동안 천천히 반복해 주세요. '
-          '목표는 ${exercise.taskTargetCount}회 이상 성공입니다. '
-          '빠르게 많이 하는 것보다 정확하고 부드럽게 움직이는 것이 중요합니다. '
-          '성공 횟수는 운동이 끝난 뒤 자동으로 분석합니다. '
-          '준비해 주세요.',
+      '환측 팔로 따라합니다. 처음 맞춘 위치에서 준비해 주세요.',
     );
 
     if (!mounted) return;
@@ -1350,7 +1678,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
       if (_prepareSeconds <= 1) {
         timer.cancel();
         setState(() => _prepareSeconds = 0);
-        await VoiceGuide.speak('지금 따라해 주세요.');
+        VoiceGuide.speak('시작');
         await _startAutoImitation();
       } else {
         setState(() => _prepareSeconds -= 1);
@@ -1448,7 +1776,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
       return;
     }
 
-    await VoiceGuide.speak('잘하셨습니다. 결과를 확인합니다.');
+    await VoiceGuide.speak('잘하셨습니다. 결과를 분석합니다.');
 
     if (!mounted) return;
     context.go('/feedback', extra: {
@@ -1540,7 +1868,7 @@ class _ImitationScreenState extends State<ImitationScreen> {
           ),
           const SizedBox(height: 8),
           const Text(
-            '성공 횟수는 운동 후 결과 화면에서 자동 분석됩니다.',
+            '처음 맞춘 위치에서 천천히 따라해 주세요.',
             style: TextStyle(
               fontSize: 12,
               height: 1.3,
@@ -1710,10 +2038,20 @@ class _ImitationScreenState extends State<ImitationScreen> {
                 child: _PreviewFrame(
                   aspectRatio:
                   _cameraAspectRatioForScreen(context, cc),
-                  child: CameraPreview(cc),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CameraPreview(cc),
+                      const _PatientPositionGuide(),
+                      if (_prepareSeconds <= 0)
+                        _TaskTargetOverlay(
+                          exerciseId: exerciseId,
+                          affectedSide: affectedSide,
+                        ),
+                    ],
+                  ),
                 ),
               ),
-
               Positioned(
                 top: 12,
                 left: 12,
@@ -1724,13 +2062,11 @@ class _ImitationScreenState extends State<ImitationScreen> {
                   targetCount: exercise.taskTargetCount,
                 ),
               ),
-
               _exampleVideoPip(
                 vc: vc,
                 placeLeft: placePipLeft,
                 isTablet: isTablet,
               ),
-
               Positioned(
                 top: 358,
                 left: placePipLeft ? 12 : null,
@@ -1751,11 +2087,9 @@ class _ImitationScreenState extends State<ImitationScreen> {
                       ),
                     ],
                   ),
-                  child: Text(
-                    placePipLeft
-                        ? '예시 영상'
-                        : '예시 영상',
-                    style: const TextStyle(
+                  child: const Text(
+                    '예시 영상',
+                    style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                       color: Color(0xFF455468),
@@ -1763,7 +2097,6 @@ class _ImitationScreenState extends State<ImitationScreen> {
                   ),
                 ),
               ),
-
               if (_prepareSeconds > 0 && !_recording)
                 Center(
                   child: Container(
@@ -1785,7 +2118,6 @@ class _ImitationScreenState extends State<ImitationScreen> {
                     ),
                   ),
                 ),
-
               Positioned(
                 left: 14,
                 right: 14,
@@ -1794,7 +2126,6 @@ class _ImitationScreenState extends State<ImitationScreen> {
                   targetCount: exercise.taskTargetCount,
                 ),
               ),
-
               Positioned(
                 left: 14,
                 right: 14,
@@ -1804,7 +2135,8 @@ class _ImitationScreenState extends State<ImitationScreen> {
                   child: OutlinedButton(
                     onPressed: _cancelExercise,
                     style: OutlinedButton.styleFrom(
-                      backgroundColor: Colors.white.withOpacity(0.94),
+                      backgroundColor:
+                      Colors.white.withOpacity(0.94),
                       side: const BorderSide(
                         color: Color(0xFFDCE6F2),
                       ),

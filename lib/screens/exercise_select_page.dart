@@ -11,6 +11,7 @@ import '../storage/isar_db.dart';
 import '../ui/app_scaffold_body.dart';
 import '../ui/responsive.dart';
 import '../utils/voice_guide.dart';
+import '../widgets/task_image.dart';
 
 class ExerciseSelectPage extends StatefulWidget {
   const ExerciseSelectPage({super.key});
@@ -78,6 +79,27 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     return data?['autoStartRoutineAfterScreening'] == true;
   }
 
+  List<int> _routeRecommendedExerciseIds() {
+    final data = _routeData();
+    final raw = data?['recommendedExerciseIds'];
+
+    if (raw is List) {
+      return raw
+          .map((e) {
+        if (e is int) return e;
+        if (e is num) return e.toInt();
+        return int.tryParse('$e');
+      })
+          .whereType<int>()
+          .where((id) => id >= 0 && id <= 7)
+          .toSet()
+          .take(3)
+          .toList();
+    }
+
+    return <int>[];
+  }
+
   bool _shouldStartEvaluationFirst() {
     return !_allowRoutineStartAfterScreening();
   }
@@ -98,6 +120,16 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
   }
 
   Future<void> _loadRecommendedExercises() async {
+    final routeRecommendedIds = _routeRecommendedExerciseIds();
+
+    if (routeRecommendedIds.isNotEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _recommendedIds = routeRecommendedIds;
+      });
+      return;
+    }
+
     final int? patientId = _currentPatientId();
 
     if (patientId == null) {
@@ -209,16 +241,19 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     }
 
     if (allowRoutineStart && hasRecommendations && !shouldStartEvaluation) {
-      await VoiceGuide.speak(
-        '평가가 완료되어 오늘의 추천운동 세 가지가 준비되었습니다. '
-            '운동시작이라고 말하면 첫 번째 운동을 바로 시작합니다. '
-            '말이 없으면 10초 후 자동으로 첫 번째 운동이 시작됩니다.',
-      );
+      await VoiceGuide.speak('추천 순서대로 오늘의 운동을 시작합니다.');
+
+      if (!mounted || _autoActionTriggered) return;
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!mounted || _autoActionTriggered) return;
+
+      await _triggerPrimaryAction();
+      return;
     } else {
       await VoiceGuide.speak(
-        '오늘의 추천운동을 만들기 위해 먼저 현재 상태 평가를 진행합니다. '
-            '평가라고 말하면 바로 시작합니다. '
-            '말이 없으면 10초 후 자동으로 현재 상태 평가가 시작됩니다.',
+        '현재 상태 평가를 시작합니다. 평가라고 말하면 바로 시작합니다. '
+            '말씀이 없으시면 10초 후 자동으로 시작합니다.',
       );
     }
 
@@ -567,9 +602,9 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
         borderRadius: BorderRadius.circular(22),
         border: Border.all(color: const Color(0xFFD2E2FA)),
       ),
-      child: Column(
+      child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
+        children: [
           Text(
             '오늘의 진행 순서',
             style: TextStyle(
@@ -608,8 +643,7 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
     final command = allowRoutineStart && hasRecommendations ? '운동시작' : '평가';
 
     final description = allowRoutineStart && hasRecommendations
-        ? '“운동시작”이라고 말하면 첫 번째 추천운동을 바로 시작합니다.\n'
-        '말이 없으면 $_autoSecondsLeft초 후 자동으로 첫 번째 운동이 시작됩니다.'
+        ? '추천 순서대로 첫 번째 운동을 시작합니다.'
         : '“평가”라고 말하면 현재 상태 평가를 바로 시작합니다.\n'
         '말이 없으면 $_autoSecondsLeft초 후 자동으로 평가가 시작됩니다.';
 
@@ -792,143 +826,183 @@ class _ExerciseSelectPageState extends State<ExerciseSelectPage> {
 
   Widget _recommendCard(dynamic ex, int order) {
     return Builder(
-      builder: (context) => Container(
-        width: double.infinity,
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: EdgeInsets.all(Responsive.isTablet(context) ? 18 : 16),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(Responsive.cardRadius(context)),
-          color: const Color(0xFFEAF2FF),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Center(
-                child: Text(
-                  '$order',
-                  style: const TextStyle(
-                    color: Color(0xFF2F67B2),
-                    fontWeight: FontWeight.w900,
+      builder: (context) {
+        final imageSize = Responsive.isTablet(context) ? 72.0 : 64.0;
+
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: EdgeInsets.all(Responsive.isTablet(context) ? 18 : 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(Responsive.cardRadius(context)),
+            color: const Color(0xFFEAF2FF),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Center(
+                  child: Text(
+                    '$order',
+                    style: const TextStyle(
+                      color: Color(0xFF2F67B2),
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    ex.taskTitle,
-                    style: TextStyle(
-                      fontSize: Responsive.bodyFontSize(context) + 1,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${ex.name} 운동',
-                    style: TextStyle(
-                      fontSize: Responsive.bodyFontSize(context) - 2,
-                      fontWeight: FontWeight.w600,
-                      color: const Color(0xFF5B6676),
-                    ),
-                  ),
-                ],
+              const SizedBox(width: 10),
+              TaskImage(
+                imagePath: ex.taskImagePath,
+                width: imageSize,
+                height: imageSize,
+                borderRadius: BorderRadius.circular(16),
               ),
-            ),
-          ],
-        ),
-      ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      ex.taskTitle,
+                      style: TextStyle(
+                        fontSize: Responsive.bodyFontSize(context) + 1,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${ex.name} 운동',
+                      style: TextStyle(
+                        fontSize: Responsive.bodyFontSize(context) - 2,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF5B6676),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      ex.taskDescription,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: Responsive.bodyFontSize(context) - 3,
+                        height: 1.3,
+                        color: const Color(0xFF5B6676),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
   Widget _exerciseCard(dynamic ex, int? patientId, String affectedSide) {
     return Builder(
-      builder: (context) => InkWell(
-        onTap: () => _showRepeatCountSheet(ex, patientId, affectedSide),
-        borderRadius: BorderRadius.circular(Responsive.cardRadius(context)),
-        child: Container(
-          padding: EdgeInsets.all(Responsive.isTablet(context) ? 18 : 16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(Responsive.cardRadius(context)),
-            color: Colors.white,
-            border: Border.all(color: const Color(0xFFE3E8EF)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                ex.taskTitle,
-                style: TextStyle(
-                  fontSize: Responsive.bodyFontSize(context) + 2,
-                  fontWeight: FontWeight.w800,
+      builder: (context) {
+        final isTablet = Responsive.isTablet(context);
+        final imageSize = isTablet ? 92.0 : 82.0;
+
+        return InkWell(
+          onTap: () => _showRepeatCountSheet(ex, patientId, affectedSide),
+          borderRadius: BorderRadius.circular(Responsive.cardRadius(context)),
+          child: Container(
+            padding: EdgeInsets.all(isTablet ? 18 : 16),
+            decoration: BoxDecoration(
+              borderRadius:
+              BorderRadius.circular(Responsive.cardRadius(context)),
+              color: Colors.white,
+              border: Border.all(color: const Color(0xFFE3E8EF)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TaskImage(
+                  imagePath: ex.taskImagePath,
+                  width: imageSize,
+                  height: imageSize,
+                  borderRadius: BorderRadius.circular(18),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '${ex.name} 운동',
-                style: TextStyle(
-                  fontSize: Responsive.bodyFontSize(context) - 1,
-                  fontWeight: FontWeight.w600,
-                  color: const Color(0xFF5B6676),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                ex.taskDescription,
-                maxLines: Responsive.isTablet(context) ? 3 : null,
-                overflow: Responsive.isTablet(context)
-                    ? TextOverflow.ellipsis
-                    : TextOverflow.visible,
-                style: TextStyle(
-                  fontSize: Responsive.bodyFontSize(context) - 1,
-                  height: 1.4,
-                  color: const Color(0xFF5B6676),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF7FAFF),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: const Color(0xFFDCE6F2),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        ex.taskTitle,
+                        style: TextStyle(
+                          fontSize: Responsive.bodyFontSize(context) + 2,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${ex.name} 운동',
+                        style: TextStyle(
+                          fontSize: Responsive.bodyFontSize(context) - 1,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFF5B6676),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        ex.taskDescription,
+                        maxLines: isTablet ? 2 : 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: Responsive.bodyFontSize(context) - 1,
+                          height: 1.35,
+                          color: const Color(0xFF5B6676),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF7FAFF),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: const Color(0xFFDCE6F2),
+                          ),
+                        ),
+                        child: Text(
+                          '목표: 1분 동안 ${ex.taskTargetCount}회 이상 성공',
+                          style: TextStyle(
+                            fontSize: Responsive.bodyFontSize(context) - 2,
+                            fontWeight: FontWeight.w700,
+                            color: const Color(0xFF2F67B2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '눌러서 반복 횟수를 선택하세요',
+                        style: TextStyle(
+                          fontSize: Responsive.bodyFontSize(context) - 2,
+                          fontWeight: FontWeight.w600,
+                          color: const Color(0xFF5B8DEF),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                child: Text(
-                  '목표: 1분 동안 ${ex.taskTargetCount}회 이상 성공',
-                  style: TextStyle(
-                    fontSize: Responsive.bodyFontSize(context) - 2,
-                    fontWeight: FontWeight.w700,
-                    color: const Color(0xFF2F67B2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '눌러서 반복 횟수를 선택하세요',
-                style: TextStyle(
-                  fontSize: Responsive.bodyFontSize(context) - 2,
-                  fontWeight: FontWeight.w600,
-                  color: const Color(0xFF5B8DEF),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -1329,10 +1403,10 @@ class _RepeatCountSheetState extends State<_RepeatCountSheet> {
                           ],
                         ),
                         const SizedBox(height: 10),
-                        Wrap(
+                        const Wrap(
                           spacing: 8,
                           runSpacing: 8,
-                          children: const [
+                          children: [
                             _VoiceCommandPill(text: '한번'),
                             _VoiceCommandPill(text: '두번'),
                             _VoiceCommandPill(text: '세번'),

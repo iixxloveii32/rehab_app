@@ -59,7 +59,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   Map<String, dynamic> _features = <String, dynamic>{};
 
   Timer? _autoTimer;
-  int _secondsLeft = 10;
+  int _secondsLeft = 5;
 
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _speechReady = false;
@@ -366,21 +366,21 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   String _voiceGuideText(bool needsRetake) {
     if (needsRetake) {
-      return '원하시면 말로도 선택할 수 있어요. 다시 라고 말하면 다시 시작합니다.';
+      return '"다시"라고 말하면 바로 다시 시작합니다.';
     }
 
     if (_hasMoreRepeats) {
-      return '원하시면 말로도 선택할 수 있어요. 다음 이라고 말하면 다음 반복을 시작합니다.';
+      return '"다음"이라고 말하면 다음 반복을 시작합니다.';
     }
 
     if (_hasRoutine) {
       if (_isLastRoutineItem) {
-        return '원하시면 말로도 선택할 수 있어요. 결과 또는 종료 라고 말하면 결과 화면으로 이동합니다.';
+        return '"결과"라고 말하면 결과 화면으로 이동합니다.';
       }
-      return '원하시면 말로도 선택할 수 있어요. 다음 이라고 말하면 다음 운동을 시작합니다. 종료 라고 말하면 오늘 운동을 마칩니다.';
+      return '"다음"이라고 말하면 다음 운동을 시작합니다.';
     }
 
-    return '원하시면 말로도 선택할 수 있어요. 다음 이라고 말하면 다음 추천 운동을 시작합니다. 선택 이라고 말하면 운동 선택 화면으로 이동합니다. 종료 라고 말하면 오늘 운동을 종료합니다.';
+    return '"다음"이라고 말하면 추천 운동을 시작합니다.';
   }
 
   List<String> _voiceCommands(bool needsRetake) {
@@ -511,7 +511,9 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   void _startAutoNext() {
     _autoTimer?.cancel();
-    _secondsLeft = 10;
+
+    final needsRetake = _quality['needsRetake'] == true;
+    _secondsLeft = needsRetake ? 10 : AppConfig.feedbackAutoNextSec;
 
     _autoTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -521,6 +523,11 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       if (_secondsLeft <= 1) {
         timer.cancel();
+
+        if (needsRetake) {
+          _retryCurrentExercise();
+          return;
+        }
 
         if (_hasMoreRepeats) {
           _goNextRepeat();
@@ -728,6 +735,12 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       await _prepareAnalysisVideo(patientPath);
 
+      unawaited(
+        VoiceGuide.speak(
+          '분석 중입니다. 방금 따라한 동작을 다시 보며 기다려 주세요.',
+        ),
+      );
+
       final now = DateTime.now();
       final todayKey = _dateKey(now);
       final sessionUuid =
@@ -823,13 +836,16 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         await _analysisVideoController?.pause();
       } catch (_) {}
 
+      await VoiceGuide.stop();
+
       if (!mounted) return;
       setState(() => _saving = false);
 
       final needsRetake = result.quality['needsRetake'] == true;
 
       if (needsRetake) {
-        await VoiceGuide.speak('다시 한 번 촬영해 주세요.');
+        await VoiceGuide.speak('다시 한 번 촬영하겠습니다. 말씀이 없으면 10초 후 자동으로 다시 시작합니다.');
+        _startAutoNext();
         await _announceVoiceCommandsAndListen(true);
         return;
       }
@@ -945,36 +961,49 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   Widget _scoreTile(String label, int value) {
     final color = _scoreColor(value);
+    final ratio = (value / 100.0).clamp(0.0, 1.0);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: color.withOpacity(0.18)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE3E8EF)),
       ),
       child: Row(
         children: [
-          Expanded(
+          SizedBox(
+            width: 92,
             child: Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
+                fontSize: 14,
+                fontWeight: FontWeight.w800,
               ),
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.10),
+          Expanded(
+            child: ClipRRect(
               borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                minHeight: 8,
+                value: ratio,
+                backgroundColor: const Color(0xFFE9EEF5),
+                valueColor: AlwaysStoppedAnimation<Color>(color),
+              ),
             ),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 44,
             child: Text(
               '$value점',
+              textAlign: TextAlign.right,
               style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w800,
+                fontSize: 14,
+                fontWeight: FontWeight.w900,
                 color: color,
               ),
             ),
@@ -984,69 +1013,118 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
     );
   }
 
-  Widget _resultSummaryCard(bool needsRetake) {
-    final color = needsRetake
-        ? const Color(0xFFFFF3E8)
-        : const Color(0xFFEAF2FF);
-
+  Widget _scoreListCard(bool needsRetake) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(22),
+        color: const Color(0xFFF7FAFF),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFDCE6F2)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            _scoreTitle(),
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              height: 1.25,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              const Text(
-                '총점',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                '$_overall',
-                style: const TextStyle(
-                  fontSize: 40,
-                  fontWeight: FontWeight.w800,
-                  height: 1.0,
-                ),
-              ),
-              const SizedBox(width: 4),
-              const Padding(
-                padding: EdgeInsets.only(bottom: 4),
-                child: Text(
-                  '점',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _scoreComment(),
+            needsRetake ? '확인된 세부 결과' : '세부 결과',
             style: const TextStyle(
               fontSize: 16,
-              height: 1.5,
-              fontWeight: FontWeight.w500,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _scoreTile(_labelForScore('rom'), _rom),
+          const SizedBox(height: 6),
+          _scoreTile(_labelForScore('compensation'), _compensation),
+          const SizedBox(height: 6),
+          _scoreTile(_labelForScore('symmetry'), _symmetry),
+          const SizedBox(height: 6),
+          _scoreTile(_labelForScore('smoothness'), _smoothness),
+          const SizedBox(height: 6),
+          _scoreTile(_labelForScore('timing'), _timing),
+        ],
+      ),
+    );
+  }
+
+  Widget _resultSummaryCard(bool needsRetake) {
+    final color = needsRetake ? const Color(0xFFFFF3E8) : const Color(0xFFEAF2FF);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 78,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.72),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Column(
+              children: [
+                const Text(
+                  '총점',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$_overall',
+                  style: const TextStyle(
+                    fontSize: 34,
+                    fontWeight: FontWeight.w900,
+                    height: 1.0,
+                  ),
+                ),
+                const Text(
+                  '점',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _scoreTitle(),
+                  style: const TextStyle(
+                    fontSize: 21,
+                    fontWeight: FontWeight.w900,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _scoreComment(),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    height: 1.35,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  needsRetake
+                      ? '$_secondsLeft초 후 같은 운동을 다시 시작합니다'
+                      : '$_secondsLeft초 후 자동으로 넘어갑니다',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF2F67B2),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1059,69 +1137,45 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFF7FAFF),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFDCE6F2)),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE3E8EF)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          const Text(
-            '과제 수행 결과',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _taskMetricBox(
-                  label: '목표',
-                  value: '${_taskTargetCount}회 이상',
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _taskMetricBox(
-                  label: '성공',
-                  value: '${_taskSuccessCount}회',
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _taskMetricBox(
-                  label: '달성률',
-                  value: '$percent%',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _taskScoreRow(
-            label: '과제 성공 점수',
-            value: _taskScore,
-          ),
-          const SizedBox(height: 8),
-          _taskScoreRow(
-            label: '최종 과제지향 점수',
-            value: _finalTaskOrientedScore,
-          ),
-          const SizedBox(height: 10),
-          const Text(
-            '성공 횟수는 실제 수행 횟수로 저장하고, 과제 성공 점수는 100점까지 반영합니다.',
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.4,
-              color: Color(0xFF5B6676),
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          Expanded(child: _taskMiniText('목표', '${_taskTargetCount}회')),
+          Expanded(child: _taskMiniText('성공', '${_taskSuccessCount}회')),
+          Expanded(child: _taskMiniText('달성률', '$percent%')),
+          Expanded(child: _taskMiniText('최종', '${_finalTaskOrientedScore.round()}점')),
         ],
       ),
+    );
+  }
+
+  Widget _taskMiniText(String label, String value) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF5B6676),
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w900,
+            color: Color(0xFF2F67B2),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1243,118 +1297,47 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   Widget _voiceCommandCard(bool needsRetake) {
-    final commands = _voiceCommands(needsRetake);
+    final commands = _voiceCommands(needsRetake).map((e) => '“$e”').join(' / ');
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
         color: const Color(0xFFF7FAFF),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(color: const Color(0xFFDCE6F2)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              const Icon(Icons.mic_none_rounded),
-              const SizedBox(width: 8),
-              const Text(
-                '말로도 선택할 수 있어요',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const Spacer(),
-              if (_speechReady)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _listening
-                        ? const Color(0xFFEAF7EE)
-                        : const Color(0xFFF1F4F8),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    _listening ? '듣는 중' : '대기',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: _listening
-                          ? const Color(0xFF3FAE6F)
-                          : const Color(0xFF5B6676),
-                    ),
-                  ),
-                ),
-            ],
+          Icon(
+            _listening ? Icons.mic : Icons.mic_none_rounded,
+            size: 18,
+            color: _listening ? const Color(0xFF3FAE6F) : const Color(0xFF5B6676),
           ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: commands
-                .map(
-                  (cmd) => Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEAF2FF),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                    color: const Color(0xFFC9DCF8),
-                  ),
-                ),
-                child: Text(
-                  cmd,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF2F67B2),
-                  ),
-                ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _speechReady ? '말로도 가능: $commands' : '음성 인식 사용 불가',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFF455468),
               ),
-            )
-                .toList(),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _speechReady
-                ? '원하는 버튼 대신 위 단어를 말해 보세요.'
-                : '이 기기에서는 음성 인식을 사용할 수 없어요.',
-            style: const TextStyle(
-              fontSize: 15,
-              height: 1.4,
             ),
           ),
-          if (_lastRecognizedWords.isNotEmpty) ...[
-            const SizedBox(height: 10),
+          if (_lastRecognizedWords.isNotEmpty)
             Text(
-              '인식된 말: $_lastRecognizedWords',
+              _lastRecognizedWords,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
                 color: Color(0xFF5B6676),
               ),
             ),
-          ],
-          if (_speechReady) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _startListening(needsRetake: needsRetake),
-                icon: Icon(_listening ? Icons.mic : Icons.mic_none),
-                label: Text(_listening ? '듣는 중' : '음성으로 선택하기'),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -1526,7 +1509,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                   ),
                   SizedBox(height: 10),
                   Text(
-                    '방금 수행한 움직임을 다시 보면서\n팔이 얼마나 부드럽게 움직였는지 관찰해 보세요.',
+                    '방금 따라한 동작을 다시 보며 기다려 주세요.\n분석이 끝나면 자동으로 결과가 표시됩니다.',
                     style: TextStyle(
                       fontSize: 16,
                       height: 1.45,
@@ -1541,45 +1524,45 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
               child: Center(
                 child: hasVideo
                     ? ClipRRect(
-                        borderRadius: BorderRadius.circular(22),
-                        child: Container(
-                          color: Colors.black,
-                          child: AspectRatio(
-                            aspectRatio: controller.value.aspectRatio,
-                            child: VideoPlayer(controller),
-                          ),
-                        ),
-                      )
+                  borderRadius: BorderRadius.circular(22),
+                  child: Container(
+                    color: Colors.black,
+                    child: AspectRatio(
+                      aspectRatio: controller.value.aspectRatio,
+                      child: VideoPlayer(controller),
+                    ),
+                  ),
+                )
                     : Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(22),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF7FAFF),
-                          borderRadius: BorderRadius.circular(22),
-                          border: Border.all(
-                            color: const Color(0xFFDCE6F2),
-                          ),
-                        ),
-                        child: const Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.video_library_outlined,
-                              size: 42,
-                              color: Color(0xFF5B8DEF),
-                            ),
-                            SizedBox(height: 12),
-                            Text(
-                              '수행 영상을 준비하고 있어요.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7FAFF),
+                    borderRadius: BorderRadius.circular(22),
+                    border: Border.all(
+                      color: const Color(0xFFDCE6F2),
+                    ),
+                  ),
+                  child: const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.video_library_outlined,
+                        size: 42,
+                        color: Color(0xFF5B8DEF),
+                      ),
+                      SizedBox(height: 12),
+                      Text(
+                        '수행 영상을 준비하고 있어요.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
+                    ],
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: 16),
@@ -1659,58 +1642,15 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
                       _resultSummaryCard(needsRetake),
 
                     if (!needsRetake) ...[
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 8),
                       _taskResultCard(),
                     ],
 
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 8),
+                    _scoreListCard(needsRetake),
 
+                    const SizedBox(height: 8),
                     _voiceCommandCard(needsRetake),
-
-                    const SizedBox(height: 14),
-
-                    Text(
-                      _hasMoreRepeats ? '이번 반복에서 확인한 점' : '세부 결과',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    _scoreTile(_labelForScore('rom'), _rom),
-                    const SizedBox(height: 8),
-                    _scoreTile(
-                      _labelForScore('compensation'),
-                      _compensation,
-                    ),
-                    const SizedBox(height: 8),
-                    _scoreTile(_labelForScore('symmetry'), _symmetry),
-                    const SizedBox(height: 8),
-                    _scoreTile(_labelForScore('smoothness'), _smoothness),
-                    const SizedBox(height: 8),
-                    _scoreTile(_labelForScore('timing'), _timing),
-
-                    if (needsRetake) ...[
-                      const SizedBox(height: 14),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF3E8),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: const Color(0xFFFFD6A5),
-                          ),
-                        ),
-                        child: Text(
-                          _retakeMessage(),
-                          style: const TextStyle(
-                            fontSize: 16,
-                            height: 1.45,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
 
                     const SizedBox(height: 16),
 

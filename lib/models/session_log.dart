@@ -1,10 +1,14 @@
 import 'package:isar/isar.dart';
-import '../models/session_log.dart';
+
 part 'session_log.g.dart';
 
 @collection
 class SessionLog {
   Id id = Isar.autoIncrement;
+
+  // =========================
+  // Basic identifiers
+  // =========================
 
   @Index()
   late int patientId;
@@ -16,36 +20,52 @@ class SessionLog {
   late DateTime timestampKst;
 
   @Index()
-  late String dateKey; // "YYYY-MM-DD" (KST)
+  late String dateKey; // YYYY-MM-DD (KST)
+
+  // =========================
+  // Movement quality scores
+  // =========================
 
   late int overall; // 0~100
 
-  // sub scores (0~100)
-  int symmetry = 0;
-  int timing = 0;
-  int smoothness = 0;
-  int compensation = 0;
-  int rom = 0;
+  int symmetry = 0; // 좌우 균형
+  int timing = 0; // 속도 맞추기
+  int smoothness = 0; // 움직임 부드러움
+  int compensation = 0; // 몸통 안정성
+  int rom = 0; // 동작 범위
 
-  // 연구용 메타(권장)
+  // =========================
+  // Research / app metadata
+  // =========================
+
   @Index()
   late String sessionUuid;
-  String appVersion = '0.1.0';
-  int scoreSchemaVersion = 1;
+
+  // AppConfig와 맞춘 기본값입니다.
+  // 저장 시 AppConfig.appVersion / scoreSchemaVersion으로 덮어쓰는 구조를 권장합니다.
+  String appVersion = '0.2.0-task-oriented';
+  int scoreSchemaVersion = 2;
+
   // =========================
-  // B(건측 ref / 환측 imit) 구조용 필드
+  // Reference / imitation structure
   // =========================
 
   @Index()
-  bool isReference = false;   // true: 건측 캘리브레이션 / false: 환측 평가
+  bool isReference = false; // true: 건측 기준 영상 / false: 환측 수행 또는 평가 영상
 
-  int attemptIndex = 0;       // 같은 동작 반복 횟수
+  int attemptIndex = 0; // 같은 날짜·같은 운동 내 시도 순서 또는 스크리닝 순서
 
-  // 분석 결과(서버/MockAnalyzer)
+  // =========================
+  // Server analysis payloads
+  // =========================
+
   String? featuresJson;
   String? qualityJson;
 
-  // 영상 경로(재분석/디버깅 대비)
+  // =========================
+  // Video paths
+  // =========================
+
   String? referenceVideoPath;
   String? imitationVideoPath;
 }
