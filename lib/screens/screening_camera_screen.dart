@@ -324,7 +324,10 @@ class _ScreeningCameraScreenState extends State<ScreeningCameraScreen> {
                   CameraPreview(c),
                   const _ScreeningCameraGuideOverlay(),
                   if (_prepareSeconds <= 0)
-                    _ScreeningTargetOverlay(exerciseId: currentItem.exerciseId),
+                    _ScreeningTargetOverlay(
+                      exerciseId: currentItem.exerciseId,
+                      affectedSide: (_routeData()?['affectedSide'] as String?) ?? 'L',
+                    ),
                   Positioned(
                     top: 12,
                     left: 12,
@@ -499,36 +502,28 @@ class _ScreeningCameraGuideOverlay extends StatelessWidget {
       child: Stack(
         children: [
           Align(
-            alignment: const Alignment(0, -0.20),
+            alignment: const Alignment(-0.84, 0),
             child: Container(
-              width: 220,
-              height: 2,
-              color: Colors.lightGreenAccent.withOpacity(0.82),
-            ),
-          ),
-          Align(
-            alignment: const Alignment(-0.82, 0),
-            child: Container(
-              width: 1.5,
+              width: 1.3,
               height: double.infinity,
-              color: Colors.white.withOpacity(0.22),
+              color: Colors.white.withOpacity(0.18),
             ),
           ),
           Align(
-            alignment: const Alignment(0.82, 0),
+            alignment: const Alignment(0.84, 0),
             child: Container(
-              width: 1.5,
+              width: 1.3,
               height: double.infinity,
-              color: Colors.white.withOpacity(0.22),
+              color: Colors.white.withOpacity(0.18),
             ),
           ),
           Align(
-            alignment: const Alignment(0, 0.82),
+            alignment: const Alignment(0, 0.84),
             child: Container(
               width: double.infinity,
-              height: 1.5,
+              height: 1.3,
               margin: const EdgeInsets.symmetric(horizontal: 14),
-              color: Colors.white.withOpacity(0.22),
+              color: Colors.white.withOpacity(0.18),
             ),
           ),
           Align(
@@ -537,12 +532,14 @@ class _ScreeningCameraGuideOverlay extends StatelessWidget {
               margin: const EdgeInsets.symmetric(horizontal: 14),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.50),
+                color: Colors.black.withOpacity(0.48),
                 borderRadius: BorderRadius.circular(999),
               ),
               child: const Text(
-                '손끝까지 보이게 조금 더 멀리 서 주세요',
+                '팔 전체가 화면 안에 보이게 해 주세요',
                 textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 12,
@@ -560,110 +557,129 @@ class _ScreeningCameraGuideOverlay extends StatelessWidget {
 
 class _ScreeningTargetOverlay extends StatelessWidget {
   final int exerciseId;
+  final String affectedSide;
 
   const _ScreeningTargetOverlay({
     required this.exerciseId,
+    required this.affectedSide,
   });
 
-  _ScreeningCue _cue() {
+  _ScreeningTarget? _target() {
+    final isLeftAffected = affectedSide.toUpperCase() == 'L';
+    final sideX = isLeftAffected ? 0.22 : 0.78;
+    final sideUpperX = isLeftAffected ? 0.24 : 0.76;
+
     switch (exerciseId) {
       case 0:
-        return const _ScreeningCue(Offset(0.50, 0.55), Offset(0.50, 0.25), '위로 들어요', false);
+        return const _ScreeningTarget(Offset(0.50, 0.25), '위');
       case 1:
-        return const _ScreeningCue(Offset(0.50, 0.50), Offset(0.82, 0.36), '옆으로 들어요', false);
+        return _ScreeningTarget(Offset(sideUpperX, 0.34), '옆');
       case 2:
-        return const _ScreeningCue(Offset(0.50, 0.58), Offset(0.50, 0.30), '머리 쪽으로', true);
+        return const _ScreeningTarget(Offset(0.50, 0.29), '머리');
       case 3:
-        return const _ScreeningCue(Offset(0.50, 0.56), Offset(0.35, 0.66), '허리 뒤로', true);
+      // 허리 뒤로 손 가져가기는 화면상 점 목표가 오히려 혼란스러워 표시하지 않는다.
+        return null;
       case 4:
-        return const _ScreeningCue(Offset(0.50, 0.55), Offset(0.50, 0.39), '앞으로 뻗어요', false);
+        return const _ScreeningTarget(Offset(0.50, 0.39), '앞');
+      case 5:
+        return _ScreeningTarget(Offset(sideX, 0.47), '옆');
       default:
-        return const _ScreeningCue(Offset(0.50, 0.55), Offset(0.50, 0.39), '움직여요', false);
+        return const _ScreeningTarget(Offset(0.50, 0.40), '목표');
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final target = _target();
+    if (target == null) return const SizedBox.shrink();
+
     return IgnorePointer(
       child: CustomPaint(
-        painter: _ScreeningDirectionPainter(_cue()),
+        painter: _ScreeningTargetDotPainter(target),
         child: const SizedBox.expand(),
       ),
     );
   }
 }
 
-class _ScreeningCue {
-  final Offset start;
-  final Offset end;
+class _ScreeningTarget {
+  final Offset position;
   final String label;
-  final bool curved;
 
-  const _ScreeningCue(this.start, this.end, this.label, this.curved);
+  const _ScreeningTarget(this.position, this.label);
 }
 
-class _ScreeningDirectionPainter extends CustomPainter {
-  final _ScreeningCue cue;
+class _ScreeningTargetDotPainter extends CustomPainter {
+  final _ScreeningTarget target;
 
-  _ScreeningDirectionPainter(this.cue);
+  const _ScreeningTargetDotPainter(this.target);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final start = Offset(cue.start.dx * size.width, cue.start.dy * size.height);
-    final end = Offset(cue.end.dx * size.width, cue.end.dy * size.height);
-    final path = Path()..moveTo(start.dx, start.dy);
-    if (cue.curved) {
-      path.quadraticBezierTo((start.dx + end.dx) / 2, start.dy - 70, end.dx, end.dy);
-    } else {
-      path.lineTo(end.dx, end.dy);
-    }
+    final center = Offset(
+      target.position.dx * size.width,
+      target.position.dy * size.height,
+    );
 
-    final shadow = Paint()
-      ..color = Colors.black.withOpacity(0.25)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 7
-      ..strokeCap = StrokeCap.round;
-    final paint = Paint()
-      ..color = Colors.orangeAccent.withOpacity(0.92)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-    canvas.drawPath(path, shadow);
-    canvas.drawPath(path, paint);
-
-    final dir = end - start;
-    final angle = dir.direction;
-    final p1 = end - Offset.fromDirection(angle - 0.55, 18);
-    final p2 = end - Offset.fromDirection(angle + 0.55, 18);
-    final arrow = Path()..moveTo(p1.dx, p1.dy)..lineTo(end.dx, end.dy)..lineTo(p2.dx, p2.dy);
-    canvas.drawPath(arrow, shadow);
-    canvas.drawPath(arrow, paint);
-    canvas.drawCircle(end, 6, Paint()..color = Colors.orangeAccent.withOpacity(0.95));
+    canvas.drawCircle(
+      center,
+      20,
+      Paint()
+        ..color = Colors.redAccent.withOpacity(0.18)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      center,
+      12,
+      Paint()
+        ..color = Colors.white.withOpacity(0.92)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
+    );
+    canvas.drawCircle(
+      center,
+      9,
+      Paint()
+        ..color = Colors.redAccent.withOpacity(0.96)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      center,
+      3.2,
+      Paint()
+        ..color = Colors.white.withOpacity(0.96)
+        ..style = PaintingStyle.fill,
+    );
 
     final tp = TextPainter(
       text: TextSpan(
-        text: cue.label,
+        text: target.label,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 13,
+          fontSize: 12,
           fontWeight: FontWeight.w900,
           shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
         ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    final dx = (end.dx - tp.width / 2).clamp(8.0, size.width - tp.width - 8.0);
-    final dy = (end.dy + 12).clamp(8.0, size.height - tp.height - 8.0);
+
+    final dx = (center.dx - tp.width / 2)
+        .clamp(8.0, size.width - tp.width - 8.0);
+    final dy = (center.dy + 18)
+        .clamp(8.0, size.height - tp.height - 8.0);
     final bg = RRect.fromRectAndRadius(
-      Rect.fromLTWH(dx - 8, dy - 4, tp.width + 16, tp.height + 8),
+      Rect.fromLTWH(dx - 7, dy - 3, tp.width + 14, tp.height + 6),
       const Radius.circular(999),
     );
-    canvas.drawRRect(bg, Paint()..color = Colors.black.withOpacity(0.45));
+    canvas.drawRRect(bg, Paint()..color = Colors.black.withOpacity(0.38));
     tp.paint(canvas, Offset(dx, dy));
   }
 
   @override
-  bool shouldRepaint(covariant _ScreeningDirectionPainter oldDelegate) => oldDelegate.cue != cue;
+  bool shouldRepaint(covariant _ScreeningTargetDotPainter oldDelegate) {
+    return oldDelegate.target != target;
+  }
 }
 
 class _StageBadge extends StatelessWidget {

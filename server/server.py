@@ -182,8 +182,10 @@ def _no_motion_response(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": True,
+        "needsRetake": False,
         "reason": reason,
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -623,8 +625,11 @@ def score_shoulder_flexion(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": (quality < 0.35),
+        "needsRetake": False,
+        "lowAnalysisQuality": (quality < 0.35),
         "reason": None if quality >= 0.35 else "low_visibility_or_too_few_frames",
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -743,8 +748,11 @@ def score_shoulder_abduction(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": (quality < 0.35),
+        "needsRetake": False,
+        "lowAnalysisQuality": (quality < 0.35),
         "reason": None if quality >= 0.35 else "low_visibility_or_too_few_frames",
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -872,8 +880,11 @@ def score_hand_to_head(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": (quality < 0.35),
+        "needsRetake": False,
+        "lowAnalysisQuality": (quality < 0.35),
         "reason": None if quality >= 0.35 else "low_visibility_or_too_few_frames",
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -998,8 +1009,11 @@ def score_hand_to_back(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": (quality < 0.35),
+        "needsRetake": False,
+        "lowAnalysisQuality": (quality < 0.35),
         "reason": None if quality >= 0.35 else "low_visibility_or_too_few_frames",
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -1115,8 +1129,11 @@ def score_reach_forward(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": (quality < 0.35),
+        "needsRetake": False,
+        "lowAnalysisQuality": (quality < 0.35),
         "reason": None if quality >= 0.35 else "low_visibility_or_too_few_frames",
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -1237,8 +1254,11 @@ def score_reach_side(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": (quality < 0.35),
+        "needsRetake": False,
+        "lowAnalysisQuality": (quality < 0.35),
         "reason": None if quality >= 0.35 else "low_visibility_or_too_few_frames",
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -1357,8 +1377,11 @@ def score_elbow_flexion(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": (quality < 0.35),
+        "needsRetake": False,
+        "lowAnalysisQuality": (quality < 0.35),
         "reason": None if quality >= 0.35 else "low_visibility_or_too_few_frames",
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -1467,8 +1490,11 @@ def score_elbow_extension(
 
     quality_json = {
         "analysisStatus": "done",
-        "needsRetake": (quality < 0.35),
+        "needsRetake": False,
+        "lowAnalysisQuality": (quality < 0.35),
         "reason": None if quality >= 0.35 else "low_visibility_or_too_few_frames",
+        "scoreAsPerformed": True,
+        "retakePolicy": "disabled_score_all_performance",
         "meanVisibility_ref": ref["meanVisibility"],
         "meanVisibility_imi": imi["meanVisibility"],
         "framesUsed_ref": ref["framesUsed"],
@@ -1877,6 +1903,7 @@ def _calculate_task_payload(
         "taskScoreSchemaVersion": int(scoreSchemaVersion),
         "appVersion": appVersion,
         "taskCountAlgo": "task_count_state_machine_v1",
+        "taskAggregationPolicy": "score_all_performance_no_auto_retake",
         "taskSeriesKey": series_key,
         "taskSeriesFrames": int(series_frames),
         **(rep_quality or {}),
@@ -1915,6 +1942,7 @@ def _build_response(
         **task_payload,
         "features": features,
         "quality": quality,
+        "retakePolicy": "disabled_score_all_performance",
     }
 
 # =========================================================
@@ -2607,3 +2635,4 @@ async def analyze(
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5000)
+

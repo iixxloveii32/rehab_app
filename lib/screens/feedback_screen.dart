@@ -365,10 +365,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   String _voiceGuideText(bool needsRetake) {
-    if (needsRetake) {
-      return '"다시"라고 말하면 바로 다시 시작합니다.';
-    }
-
     if (_hasMoreRepeats) {
       return '"다음"이라고 말하면 다음 반복을 시작합니다.';
     }
@@ -384,10 +380,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   }
 
   List<String> _voiceCommands(bool needsRetake) {
-    if (needsRetake) {
-      return const ['다시'];
-    }
-
     if (_hasMoreRepeats) {
       return const ['다음'];
     }
@@ -427,15 +419,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
           final normalized = _normalizeSpeech(words);
 
-          if (needsRetake) {
-            if (normalized.contains('다시') ||
-                normalized.contains('재시도') ||
-                normalized.contains('다시시작')) {
-              _retryCurrentExercise();
-              return;
-            }
-            return;
-          }
 
           if (_hasMoreRepeats) {
             if (normalized.contains('다음') || normalized.contains('시작')) {
@@ -512,8 +495,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
   void _startAutoNext() {
     _autoTimer?.cancel();
 
-    final needsRetake = _quality['needsRetake'] == true;
-    _secondsLeft = needsRetake ? 10 : AppConfig.feedbackAutoNextSec;
+    _secondsLeft = AppConfig.feedbackAutoNextSec;
 
     _autoTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -523,11 +505,6 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
       if (_secondsLeft <= 1) {
         timer.cancel();
-
-        if (needsRetake) {
-          _retryCurrentExercise();
-          return;
-        }
 
         if (_hasMoreRepeats) {
           _goNextRepeat();
@@ -778,7 +755,14 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       _taskScore = result.taskScore;
       _finalTaskOrientedScore = result.finalTaskOrientedScore;
 
-      _quality = result.quality;
+      final qualityForSave = <String, dynamic>{
+        ...result.quality,
+        'needsRetake': false,
+        'scoreAsPerformed': true,
+        'retakePolicy': 'disabled_score_all_performance',
+      };
+
+      _quality = qualityForSave;
       _features = result.features;
 
       final existingRefs = allLogs
@@ -803,7 +787,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ..rom = 0
         ..referenceVideoPath = modelPath
         ..imitationVideoPath = null
-        ..qualityJson = jsonEncode(result.quality)
+        ..qualityJson = jsonEncode(qualityForSave)
         ..featuresJson = null;
 
       final imitLog = SessionLog()
@@ -822,7 +806,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
         ..rom = result.rom
         ..referenceVideoPath = modelPath
         ..imitationVideoPath = patientPath
-        ..qualityJson = jsonEncode(result.quality)
+        ..qualityJson = jsonEncode(qualityForSave)
         ..featuresJson = jsonEncode(result.features);
 
       await isar.writeTxn(() async {
@@ -841,14 +825,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
       if (!mounted) return;
       setState(() => _saving = false);
 
-      final needsRetake = result.quality['needsRetake'] == true;
-
-      if (needsRetake) {
-        await VoiceGuide.speak('다시 한 번 촬영하겠습니다. 말씀이 없으면 10초 후 자동으로 다시 시작합니다.');
-        _startAutoNext();
-        await _announceVoiceCommandsAndListen(true);
-        return;
-      }
+      const needsRetake = false;
 
       if (_hasMoreRepeats) {
         await VoiceGuide.speak(
@@ -1603,7 +1580,7 @@ class _FeedbackScreenState extends State<FeedbackScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final needsRetake = _quality['needsRetake'] == true;
+    const needsRetake = false;
     final nextRoutineExerciseId = _nextRoutineExerciseId();
 
     return Scaffold(

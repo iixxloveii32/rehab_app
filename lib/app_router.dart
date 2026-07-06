@@ -181,115 +181,57 @@ class _PatientPositionGuide extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IgnorePointer(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final w = constraints.maxWidth;
-          final h = constraints.maxHeight;
-
-          final shoulderY = h * 0.42;
-          final leftSafeX = w * 0.09;
-          final rightSafeX = w * 0.91;
-          final bottomSafeY = h * 0.88;
-          final shoulderWidth = w * 0.42;
-          final shoulderLeft = (w - shoulderWidth) / 2;
-
-          return Stack(
-            children: [
-              Positioned(
-                left: leftSafeX,
-                top: 0,
-                bottom: 0,
-                child: Container(
-                  width: 1.2,
-                  color: Colors.white.withOpacity(0.22),
+      child: Stack(
+        children: [
+          Align(
+            alignment: const Alignment(-0.84, 0),
+            child: Container(
+              width: 1.2,
+              height: double.infinity,
+              color: Colors.white.withOpacity(0.18),
+            ),
+          ),
+          Align(
+            alignment: const Alignment(0.84, 0),
+            child: Container(
+              width: 1.2,
+              height: double.infinity,
+              color: Colors.white.withOpacity(0.18),
+            ),
+          ),
+          Align(
+            alignment: const Alignment(0, 0.84),
+            child: Container(
+              width: double.infinity,
+              height: 1.2,
+              margin: const EdgeInsets.symmetric(horizontal: 14),
+              color: Colors.white.withOpacity(0.18),
+            ),
+          ),
+          Align(
+            alignment: const Alignment(0, 0.93),
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.44),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Text(
+                '팔 전체가 화면 안에 보이게 해 주세요',
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  height: 1.25,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-              Positioned(
-                left: rightSafeX,
-                top: 0,
-                bottom: 0,
-                child: Container(
-                  width: 1.2,
-                  color: Colors.white.withOpacity(0.22),
-                ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                top: bottomSafeY,
-                child: Container(
-                  height: 1.2,
-                  color: Colors.white.withOpacity(0.20),
-                ),
-              ),
-              Positioned(
-                left: shoulderLeft,
-                top: shoulderY,
-                child: Container(
-                  width: shoulderWidth,
-                  height: 2.4,
-                  decoration: BoxDecoration(
-                    color: Colors.lightGreenAccent.withOpacity(0.88),
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-              ),
-              Positioned(
-                left: shoulderLeft - 6,
-                top: shoulderY - 5,
-                child: _guideDot(),
-              ),
-              Positioned(
-                left: shoulderLeft + shoulderWidth - 6,
-                top: shoulderY - 5,
-                child: _guideDot(),
-              ),
-              Positioned(
-                left: 14,
-                right: 14,
-                bottom: 12,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 7,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.42),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: const Text(
-                      '손끝까지 보이게 조금 더 멀리 서 주세요',
-                      textAlign: TextAlign.center,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _guideDot() {
-    return Container(
-      width: 12,
-      height: 12,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: Colors.lightGreenAccent.withOpacity(0.95),
-        border: Border.all(
-          color: Colors.white.withOpacity(0.9),
-          width: 1.2,
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -306,180 +248,156 @@ class _TaskTargetOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cue = _cueForExercise(exerciseId, affectedSide);
+    final cue = _targetForExercise(exerciseId, affectedSide);
+    if (cue == null) return const SizedBox.shrink();
+
     return IgnorePointer(
       child: CustomPaint(
-        painter: _DirectionCuePainter(cue),
+        painter: _TargetDotPainter(cue),
         child: const SizedBox.expand(),
       ),
     );
   }
 
-  _DirectionCue _cueForExercise(int id, String side) {
-    final isLeft = side == 'L';
-    Offset sideStart = Offset(isLeft ? 0.46 : 0.54, 0.48);
-    Offset sideEnd = Offset(isLeft ? 0.18 : 0.82, 0.36);
-    Offset sideEndFlat = Offset(isLeft ? 0.16 : 0.84, 0.48);
-    Offset waistEnd = Offset(isLeft ? 0.36 : 0.64, 0.66);
+  _TargetDot? _targetForExercise(int id, String side) {
+    final normalizedSide = side.toUpperCase();
+    final isLeftAffected = normalizedSide == 'L';
+
+    // 환자 화면 기준: 좌측 환측은 화면 왼쪽, 우측 환측은 화면 오른쪽에 표시한다.
+    final sideX = isLeftAffected ? 0.22 : 0.78;
+    final sideUpperX = isLeftAffected ? 0.24 : 0.76;
 
     switch (id) {
       case 0:
-        return const _DirectionCue(
-          start: Offset(0.50, 0.53),
-          end: Offset(0.50, 0.25),
-          label: '위로 들어요',
-          curved: false,
+        return const _TargetDot(
+          position: Offset(0.50, 0.25),
+          label: '위',
         );
       case 1:
-        return _DirectionCue(
-          start: sideStart,
-          end: sideEnd,
-          label: '옆으로 들어요',
-          curved: false,
+        return _TargetDot(
+          position: Offset(sideUpperX, 0.34),
+          label: '옆',
         );
       case 2:
-        return const _DirectionCue(
-          start: Offset(0.50, 0.58),
-          end: Offset(0.50, 0.30),
-          label: '머리 쪽으로',
-          curved: true,
+        return const _TargetDot(
+          position: Offset(0.50, 0.29),
+          label: '머리',
         );
       case 3:
-        return _DirectionCue(
-          start: sideStart,
-          end: waistEnd,
-          label: '허리 뒤로',
-          curved: true,
-        );
+      // 허리 뒤로 손 가져가기는 2D 화면상 목표점을 찍으면 오히려 혼란스러워서 표시하지 않는다.
+        return null;
       case 4:
-        return const _DirectionCue(
-          start: Offset(0.50, 0.55),
-          end: Offset(0.50, 0.39),
-          label: '앞으로 뻗어요',
-          curved: false,
+        return const _TargetDot(
+          position: Offset(0.50, 0.39),
+          label: '앞',
         );
       case 5:
-        return _DirectionCue(
-          start: sideStart,
-          end: sideEndFlat,
-          label: '옆으로 뻗어요',
-          curved: false,
+        return _TargetDot(
+          position: Offset(sideX, 0.47),
+          label: '옆',
         );
       case 6:
-        return const _DirectionCue(
-          start: Offset(0.50, 0.58),
-          end: Offset(0.50, 0.42),
-          label: '몸 쪽으로',
-          curved: true,
+        return const _TargetDot(
+          position: Offset(0.50, 0.42),
+          label: '입 앞',
         );
       case 7:
-        return const _DirectionCue(
-          start: Offset(0.50, 0.54),
-          end: Offset(0.50, 0.38),
-          label: '앞으로 펴요',
-          curved: false,
+        return const _TargetDot(
+          position: Offset(0.50, 0.38),
+          label: '앞',
         );
       default:
-        return const _DirectionCue(
-          start: Offset(0.50, 0.55),
-          end: Offset(0.50, 0.38),
-          label: '움직여요',
-          curved: false,
+        return const _TargetDot(
+          position: Offset(0.50, 0.40),
+          label: '목표',
         );
     }
   }
 }
 
-class _DirectionCue {
-  final Offset start;
-  final Offset end;
+class _TargetDot {
+  final Offset position;
   final String label;
-  final bool curved;
 
-  const _DirectionCue({
-    required this.start,
-    required this.end,
+  const _TargetDot({
+    required this.position,
     required this.label,
-    required this.curved,
   });
 }
 
-class _DirectionCuePainter extends CustomPainter {
-  final _DirectionCue cue;
+class _TargetDotPainter extends CustomPainter {
+  final _TargetDot target;
 
-  _DirectionCuePainter(this.cue);
+  const _TargetDotPainter(this.target);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final start = Offset(cue.start.dx * size.width, cue.start.dy * size.height);
-    final end = Offset(cue.end.dx * size.width, cue.end.dy * size.height);
-    final color = Colors.orangeAccent.withOpacity(0.92);
+    final center = Offset(
+      target.position.dx * size.width,
+      target.position.dy * size.height,
+    );
 
-    final path = Path()..moveTo(start.dx, start.dy);
-    if (cue.curved) {
-      final control = Offset((start.dx + end.dx) / 2, start.dy - 70);
-      path.quadraticBezierTo(control.dx, control.dy, end.dx, end.dy);
-    } else {
-      path.lineTo(end.dx, end.dy);
-    }
+    final pulsePaint = Paint()
+      ..color = Colors.redAccent.withOpacity(0.18)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, 20, pulsePaint);
 
-    final shadowPaint = Paint()
-      ..color = Colors.black.withOpacity(0.25)
+    final outerPaint = Paint()
+      ..color = Colors.white.withOpacity(0.92)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 7
-      ..strokeCap = StrokeCap.round;
-    canvas.drawPath(path, shadowPaint);
+      ..strokeWidth = 3.0;
+    canvas.drawCircle(center, 12, outerPaint);
 
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round;
-    canvas.drawPath(path, paint);
+    final dotPaint = Paint()
+      ..color = Colors.redAccent.withOpacity(0.96)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, 9, dotPaint);
 
-    final direction = end - start;
-    final angle = direction.direction;
-    final arrowLength = 18.0;
-    final arrowAngle = 0.55;
-    final p1 = end - Offset.fromDirection(angle - arrowAngle, arrowLength);
-    final p2 = end - Offset.fromDirection(angle + arrowAngle, arrowLength);
-    final arrowPath = Path()
-      ..moveTo(p1.dx, p1.dy)
-      ..lineTo(end.dx, end.dy)
-      ..lineTo(p2.dx, p2.dy);
-    canvas.drawPath(arrowPath, shadowPaint);
-    canvas.drawPath(arrowPath, paint);
-
-    final dotPaint = Paint()..color = color;
-    canvas.drawCircle(end, 6, dotPaint);
-    canvas.drawCircle(end, 8, Paint()..color = Colors.white.withOpacity(0.35)..style = PaintingStyle.stroke..strokeWidth = 2);
+    final innerPaint = Paint()
+      ..color = Colors.white.withOpacity(0.96)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, 3.2, innerPaint);
 
     final textPainter = TextPainter(
       text: TextSpan(
-        text: cue.label,
+        text: target.label,
         style: const TextStyle(
           color: Colors.white,
-          fontSize: 13,
+          fontSize: 12,
           fontWeight: FontWeight.w900,
-          shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
+          shadows: [
+            Shadow(
+              color: Colors.black87,
+              blurRadius: 4,
+            ),
+          ],
         ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
-    final labelOffset = Offset(
-      (end.dx - textPainter.width / 2).clamp(8.0, size.width - textPainter.width - 8.0),
-      (end.dy + 12).clamp(8.0, size.height - textPainter.height - 8.0),
-    );
+
+    final dx = (center.dx - textPainter.width / 2)
+        .clamp(8.0, size.width - textPainter.width - 8.0);
+    final dy = (center.dy + 18)
+        .clamp(8.0, size.height - textPainter.height - 8.0);
+
     final bg = RRect.fromRectAndRadius(
-      Rect.fromLTWH(labelOffset.dx - 8, labelOffset.dy - 4, textPainter.width + 16, textPainter.height + 8),
+      Rect.fromLTWH(
+        dx - 7,
+        dy - 3,
+        textPainter.width + 14,
+        textPainter.height + 6,
+      ),
       const Radius.circular(999),
     );
-    canvas.drawRRect(bg, Paint()..color = Colors.black.withOpacity(0.45));
-    textPainter.paint(canvas, labelOffset);
+    canvas.drawRRect(bg, Paint()..color = Colors.black.withOpacity(0.38));
+    textPainter.paint(canvas, Offset(dx, dy));
   }
 
   @override
-  bool shouldRepaint(covariant _DirectionCuePainter oldDelegate) => oldDelegate.cue != cue;
+  bool shouldRepaint(covariant _TargetDotPainter oldDelegate) {
+    return oldDelegate.target != target;
+  }
 }
 
 class StepHeader extends StatelessWidget {
@@ -580,6 +498,95 @@ class StatusCard extends StatelessWidget {
           ),
           if (trailing != null) ...[
             const SizedBox(width: 12),
+            trailing!,
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactStageHeader extends StatelessWidget {
+  final String stage;
+  final String title;
+  final String? subtitle;
+  final String? status;
+  final Widget? trailing;
+
+  const _CompactStageHeader({
+    required this.stage,
+    required this.title,
+    this.subtitle,
+    this.status,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final displaySubtitle = status ?? subtitle ?? '';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: cs.primary.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: cs.primary.withOpacity(0.16),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: cs.primary.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              stage,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+                color: cs.primary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    height: 1.2,
+                  ),
+                ),
+                if (displaySubtitle.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    displaySubtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      height: 1.25,
+                      color: Color(0xFF5B6676),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 10),
             trailing!,
           ],
         ],
