@@ -13,6 +13,7 @@ import 'exercises/exercise_definitions.dart';
 import 'models/patient.dart';
 import 'screens/exercise_select_page.dart';
 import 'screens/feedback_screen.dart';
+import 'screens/exercise_history_page.dart';
 import 'screens/patient_list_screen.dart';
 import 'screens/results_page.dart';
 import 'screens/screening_analyze_screen.dart';
@@ -56,6 +57,10 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/exercise',
       builder: (context, state) => const ExerciseSelectPage(),
+    ),
+    GoRoute(
+      path: '/exercise-history',
+      builder: (context, state) => const ExerciseHistoryPage(),
     ),
     GoRoute(
       path: '/screening',

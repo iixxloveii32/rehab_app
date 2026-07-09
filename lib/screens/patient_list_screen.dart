@@ -7,7 +7,6 @@ import 'package:isar/isar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../helpers/patient_progress_helper.dart';
 import '../models/patient.dart';
 import '../models/session_log.dart';
 import '../storage/isar_db.dart';
@@ -25,7 +24,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
   bool _loading = true;
   String? _error;
   List<Patient> _patients = [];
-  Map<int, PatientProgressSummary> _progressMap = {};
+  Map<int, _PatientSummary> _summaryMap = {};
 
   @override
   void initState() {
@@ -36,16 +35,15 @@ class _PatientListScreenState extends State<PatientListScreen> {
   Future<void> _loadPatients() async {
     try {
       final isar = IsarDB.instance;
-
       final patients = await isar.patients.where().findAll();
       final logs = await isar.sessionLogs.where().findAll();
 
-      final progressMap = <int, PatientProgressSummary>{};
-
+      final summaryMap = <int, _PatientSummary>{};
       for (final patient in patients) {
-        final patientLogs =
-        logs.where((e) => e.patientId == patient.id).toList();
-        progressMap[patient.id] = PatientProgressHelper.fromLogs(patientLogs);
+        final patientLogs = logs
+            .where((e) => e.patientId == patient.id && e.isReference == false)
+            .toList();
+        summaryMap[patient.id] = _PatientSummary.fromLogs(patientLogs);
       }
 
       patients.sort((a, b) => b.id.compareTo(a.id));
@@ -53,7 +51,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
       if (!mounted) return;
       setState(() {
         _patients = patients;
-        _progressMap = progressMap;
+        _summaryMap = summaryMap;
         _error = null;
         _loading = false;
       });
@@ -66,7 +64,6 @@ class _PatientListScreenState extends State<PatientListScreen> {
     }
   }
 
-
   String _csvEscape(dynamic value) {
     final text = (value ?? '').toString();
     final escaped = text.replaceAll('"', '""');
@@ -77,7 +74,6 @@ class _PatientListScreenState extends State<PatientListScreen> {
         escaped.contains('"')) {
       return '"$escaped"';
     }
-
     return escaped;
   }
 
@@ -110,7 +106,6 @@ class _PatientListScreenState extends State<PatientListScreen> {
   Future<void> _exportPatientCsv(Patient patient) async {
     try {
       final isar = IsarDB.instance;
-
       final logs = await isar.sessionLogs
           .filter()
           .patientIdEqualTo(patient.id)
@@ -121,9 +116,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
       if (logs.isEmpty) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${patient.name}님의 저장된 운동 기록이 없습니다.'),
-          ),
+          SnackBar(content: Text('${patient.name}님의 저장된 운동 기록이 없습니다.')),
         );
         return;
       }
@@ -170,7 +163,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
             log.dateKey,
             _dateTimeLabel(log.timestampKst),
             log.exerciseId,
-            _exerciseNameForCsv(log.exerciseId),
+            _exerciseName(log.exerciseId),
             log.isReference ? 'reference' : 'imitation',
             log.attemptIndex,
             log.overall,
@@ -189,11 +182,7 @@ class _PatientListScreenState extends State<PatientListScreen> {
         ),
       ];
 
-      final csv = rows
-          .map((row) => row.map(_csvEscape).join(','))
-          .join('\r\n');
-
-      // Excel 한글 깨짐 방지용 UTF-8 BOM
+      final csv = rows.map((row) => row.map(_csvEscape).join(',')).join('\r\n');
       final csvWithBom = '\uFEFF$csv';
 
       final dir = await getTemporaryDirectory();
@@ -216,29 +205,6 @@ class _PatientListScreenState extends State<PatientListScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('CSV 내보내기 실패: $e')),
       );
-    }
-  }
-
-  String _exerciseNameForCsv(int id) {
-    switch (id) {
-      case 0:
-        return '팔 앞으로 들기';
-      case 1:
-        return '팔 옆으로 들기';
-      case 2:
-        return '머리 만지기';
-      case 3:
-        return '허리 뒤로 손 가져가기';
-      case 4:
-        return '앞으로 손 뻗기';
-      case 5:
-        return '옆으로 손 뻗기';
-      case 6:
-        return '팔 굽히기';
-      case 7:
-        return '팔 펴기';
-      default:
-        return '운동';
     }
   }
 
@@ -277,12 +243,10 @@ class _PatientListScreenState extends State<PatientListScreen> {
             .filter()
             .patientIdEqualTo(patientId)
             .findAll();
-
         final logIds = logs.map((e) => e.id).toList();
         if (logIds.isNotEmpty) {
           await isar.sessionLogs.deleteAll(logIds);
         }
-
         await isar.patients.delete(patientId);
       });
 
@@ -317,27 +281,53 @@ class _PatientListScreenState extends State<PatientListScreen> {
     return '${birthDate.year}.${birthDate.month}.${birthDate.day}';
   }
 
+  String _exerciseName(int id) {
+    switch (id) {
+      case 0:
+        return '팔 앞으로 들기';
+      case 1:
+        return '팔 옆으로 들기';
+      case 2:
+        return '머리 만지기';
+      case 3:
+        return '허리 뒤로 손 가져가기';
+      case 4:
+        return '앞으로 손 뻗기';
+      case 5:
+        return '옆으로 손 뻗기';
+      case 6:
+        return '팔 굽히기';
+      case 7:
+        return '팔 펴기';
+      default:
+        return '운동';
+    }
+  }
+
   void _goToNewPatient() {
     context.go('/patient-form');
   }
 
-  void _selectPatient(Patient p) {
+  void _selectPatient(Patient patient) {
     context.go('/exercise', extra: {
-      'patientId': p.id,
-      'affectedSide': p.affectedSide,
+      'patientId': patient.id,
+      'affectedSide': patient.affectedSide,
+    });
+  }
+
+  void _goHistory(Patient patient) {
+    context.go('/exercise-history', extra: {
+      'patientId': patient.id,
+      'affectedSide': patient.affectedSide,
     });
   }
 
   Color _statusColor(bool completedToday) {
-    return completedToday
-        ? const Color(0xFFEAF7EE)
-        : const Color(0xFFFFF3E8);
+    return completedToday ? const Color(0xFFEAF7EE) : const Color(0xFFFFF3E8);
   }
 
   Color _statusTextColor(bool completedToday) {
-    return completedToday
-        ? const Color(0xFF3FAE6F)
-        : const Color(0xFFE0A63E);
+    return completedToday ? const Color(0xFF3FAE6F) : const Color(0xFFE0A63E);
   }
 
   @override
@@ -415,13 +405,22 @@ class _PatientListScreenState extends State<PatientListScreen> {
               ),
             ),
             const SizedBox(height: 10),
-            Text(
+            const Text(
               '새 사용자를 등록한 뒤 재활 운동을 시작할 수 있어요.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: Responsive.bodyFontSize(context),
-                color: const Color(0xFF5B6676),
-                height: 1.4,
+                fontSize: 16,
+                height: 1.45,
+                color: Color(0xFF5B6676),
+              ),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _goToNewPatient,
+                icon: const Icon(Icons.person_add),
+                label: const Text('새 사용자 등록하기'),
               ),
             ),
           ],
@@ -431,243 +430,268 @@ class _PatientListScreenState extends State<PatientListScreen> {
   }
 
   Widget _patientList(bool isTablet) {
-    if (isTablet) {
-      return GridView.builder(
-        padding: const EdgeInsets.only(bottom: 8),
-        itemCount: _patients.length,
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 12,
-          childAspectRatio: 1.7,
+    return RefreshIndicator(
+      onRefresh: _loadPatients,
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.only(
+          bottom: 16 + MediaQuery.of(context).padding.bottom,
         ),
         itemBuilder: (context, index) {
-          final p = _patients[index];
-          final progress = _progressMap[p.id] ?? _defaultProgress();
-          return _patientCard(p, progress);
+          final patient = _patients[index];
+          return _patientCard(patient, isTablet);
         },
-      );
-    }
-
-    return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 8),
-      itemCount: _patients.length,
-      itemBuilder: (context, index) {
-        final p = _patients[index];
-        final progress = _progressMap[p.id] ?? _defaultProgress();
-
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: _patientCard(p, progress),
-        );
-      },
+        separatorBuilder: (_, __) => const SizedBox(height: 12),
+        itemCount: _patients.length,
+      ),
     );
   }
 
-  PatientProgressSummary _defaultProgress() {
-    return const PatientProgressSummary(
-      level: 1,
-      totalSessions: 0,
-      weeklySessions: 0,
-      totalPoints: 0,
-      badges: [],
-      statusLabel: '시작 전',
-      latestFeedback: '첫 운동을 시작해 보세요.',
+  Widget _patientCard(Patient patient, bool isTablet) {
+    final summary = _summaryMap[patient.id] ?? _PatientSummary.empty();
+
+    return Container(
+      padding: EdgeInsets.all(isTablet ? 20 : 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFFDCE6F2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              CircleAvatar(
+                radius: isTablet ? 30 : 26,
+                backgroundColor: const Color(0xFFEAF2FF),
+                child: Text(
+                  patient.name.isEmpty ? '?' : patient.name.characters.first,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    color: Color(0xFF2F67B2),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      patient.name,
+                      style: TextStyle(
+                        fontSize: isTablet ? 24 : 21,
+                        fontWeight: FontWeight.w900,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      '${_sexLabel(patient.sex)} · ${_birthLabel(patient.birthDate)} · 환측 ${_sideLabel(patient.affectedSide)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF5B6676),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '삭제',
+                onPressed: () => _confirmDeletePatient(patient),
+                icon: const Icon(Icons.delete_outline),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _statusChip(summary.completedToday),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  summary.lastDateLabel == '-'
+                      ? '아직 저장된 운동기록이 없습니다.'
+                      : '최근 운동일: ${summary.lastDateLabel}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF5B6676),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _summaryBox(
+                  label: '운동일수',
+                  value: '${summary.totalDays}일',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _summaryBox(
+                  label: '완료운동',
+                  value: '${summary.totalExercises}개',
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _summaryBox(
+                  label: '평균점수',
+                  value: '${summary.averageScore}점',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _selectPatient(patient),
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('오늘 운동 시작'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _goHistory(patient),
+                  icon: const Icon(Icons.history),
+                  label: const Text('운동기록'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _exportPatientCsv(patient),
+                  icon: const Icon(Icons.ios_share),
+                  label: const Text('CSV 내보내기'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statusChip(bool completedToday) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: _statusColor(completedToday),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        completedToday ? '오늘 완료' : '오늘 미완료',
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w900,
+          color: _statusTextColor(completedToday),
+        ),
+      ),
+    );
+  }
+
+  Widget _summaryBox({required String label, required String value}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FBFF),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE3E8EF)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF5B6676),
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+              color: Color(0xFF1F2A37),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PatientSummary {
+  final int totalDays;
+  final int totalExercises;
+  final int averageScore;
+  final String lastDateLabel;
+  final bool completedToday;
+
+  const _PatientSummary({
+    required this.totalDays,
+    required this.totalExercises,
+    required this.averageScore,
+    required this.lastDateLabel,
+    required this.completedToday,
+  });
+
+  factory _PatientSummary.empty() {
+    return const _PatientSummary(
+      totalDays: 0,
+      totalExercises: 0,
+      averageScore: 0,
+      lastDateLabel: '-',
       completedToday: false,
     );
   }
 
-  Widget _patientCard(Patient p, PatientProgressSummary progress) {
-    final badges = progress.badges.take(3).toList();
-    final extraBadgeCount =
-    progress.badges.length > 3 ? progress.badges.length - 3 : 0;
+  factory _PatientSummary.fromLogs(List<SessionLog> logs) {
+    if (logs.isEmpty) return _PatientSummary.empty();
 
-    return InkWell(
-      onTap: () => _selectPatient(p),
-      borderRadius: BorderRadius.circular(Responsive.cardRadius(context)),
-      child: Container(
-        padding: EdgeInsets.all(Responsive.isTablet(context) ? 20 : 18),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(Responsive.cardRadius(context)),
-          border: Border.all(color: const Color(0xFFE3E8EF)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    p.name,
-                    style: TextStyle(
-                      fontSize: Responsive.bodyFontSize(context) + 3,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEAF2FF),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    'Lv.${progress.level}',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                      color: Color(0xFF5B8DEF),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => _confirmDeletePatient(p),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${_sexLabel(p.sex)} / ${_birthLabel(p.birthDate)} / 환측 ${_sideLabel(p.affectedSide)}',
-              style: TextStyle(
-                fontSize: Responsive.bodyFontSize(context) - 1,
-                color: const Color(0xFF5B6676),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _statusColor(progress.completedToday),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    progress.statusLabel,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: _statusTextColor(progress.completedToday),
-                    ),
-                  ),
-                ),
-                _smallInfoChip('이번 주 ${progress.weeklySessions}회'),
-                _smallInfoChip('총 ${progress.totalSessions}회'),
-                _smallInfoChip('${progress.totalPoints}P'),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (badges.isNotEmpty) ...[
-              Text(
-                '대표 보상',
-                style: TextStyle(
-                  fontSize: Responsive.bodyFontSize(context) - 1,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ...badges.map(
-                        (badge) => Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF7E8),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        '🎖 $badge',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (extraBadgeCount > 0)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF1F4F8),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        '+$extraBadgeCount',
-                        style: const TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-            ],
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF7FAFF),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                progress.latestFeedback,
-                style: TextStyle(
-                  fontSize: Responsive.bodyFontSize(context) - 1,
-                  height: 1.4,
-                  fontWeight: FontWeight.w600,
-                  color: const Color(0xFF455468),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => _exportPatientCsv(p),
-                icon: const Icon(Icons.file_download_outlined),
-                label: const Text('CSV 내보내기'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+    logs.sort((a, b) => a.timestampKst.compareTo(b.timestampKst));
+    final days = logs.map((e) => e.dateKey).toSet();
+    final avg = (logs.map((e) => e.overall).reduce((a, b) => a + b) /
+        logs.length)
+        .round();
+    final last = logs.last.timestampKst;
+    final today = DateTime.now();
+    final todayKey =
+        '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
 
-  Widget _smallInfoChip(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF1F4F8),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
+    return _PatientSummary(
+      totalDays: days.length,
+      totalExercises: logs.length,
+      averageScore: avg,
+      lastDateLabel:
+      '${last.year}-${last.month.toString().padLeft(2, '0')}-${last.day.toString().padLeft(2, '0')}',
+      completedToday: logs.any((e) => e.dateKey == todayKey),
     );
   }
 }
